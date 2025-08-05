@@ -52,8 +52,8 @@ jobs:
       run: |
         mkdir examples
         cd examples
-        wget https://github.com/kspalaiologos/bzip3/raw/${{ github.sha }}/examples/shakespeare.txt \
-             https://github.com/kspalaiologos/bzip3/raw/${{ github.sha }}/examples/shakespeare.txt.bz3
+        wget https://github.com/iczelia/bzip3/raw/${{ github.sha }}/examples/shakespeare.txt \
+             https://github.com/iczelia/bzip3/raw/${{ github.sha }}/examples/shakespeare.txt.bz3
     - name: Configure
       run: ./configure CC=${{ matrix.compiler }} --${{ matrix.feature }}
     - name: Make
@@ -82,8 +82,8 @@ jobs:
       run: |
         mkdir examples
         cd examples
-        wget https://github.com/kspalaiologos/bzip3/raw/${{ github.sha }}/examples/shakespeare.txt \
-             https://github.com/kspalaiologos/bzip3/raw/${{ github.sha }}/examples/shakespeare.txt.bz3
+        wget https://github.com/iczelia/bzip3/raw/${{ github.sha }}/examples/shakespeare.txt \
+             https://github.com/iczelia/bzip3/raw/${{ github.sha }}/examples/shakespeare.txt.bz3
     - uses: uraimo/run-on-arch-action@v2
       name: Run in the container
       with:
@@ -120,8 +120,8 @@ jobs:
       run: |
         mkdir examples
         cd examples
-        wget https://github.com/kspalaiologos/bzip3/raw/${{ github.sha }}/examples/shakespeare.txt \
-             https://github.com/kspalaiologos/bzip3/raw/${{ github.sha }}/examples/shakespeare.txt.bz3
+        wget https://github.com/iczelia/bzip3/raw/${{ github.sha }}/examples/shakespeare.txt \
+             https://github.com/iczelia/bzip3/raw/${{ github.sha }}/examples/shakespeare.txt.bz3
     - uses: uraimo/run-on-arch-action@v2
       name: Run in the container
       with:
