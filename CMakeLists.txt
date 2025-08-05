@@ -4,7 +4,7 @@ project(
   bzip3
   VERSION 1.5.2
   DESCRIPTION "A better and stronger spiritual successor to BZip2"
-  HOMEPAGE_URL "https://github.com/kspalaiologos/bzip3"
+  HOMEPAGE_URL "https://github.com/iczelia/bzip3"
   LANGUAGES C)
 
 set(CMAKE_C_STANDARD 99)
