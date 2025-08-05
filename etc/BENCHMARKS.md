@@ -1,5 +1,5 @@
 
-[Testing corpus](https://github.com/kspalaiologos/bzip3/releases/download/corpus/corpus.7z)
+[Testing corpus](https://github.com/iczelia/bzip3/releases/download/corpus/corpus.7z)
 
 ```
 17256 bee_movie.txt.bz3
