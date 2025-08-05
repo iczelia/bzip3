@@ -152,7 +152,7 @@ decompression speed are virtually unaffected by block size.
 .SH AUTHOR
 Kamila Szewczyk, k@iczelia.net.
 
-https://github.com/kspalaiologos/bzip3
+https://github.com/iczelia/bzip3
 
 Thanks to: Ilya Grebnov, Benjamin Strachan, Caleb Maclennan, Ilya Muravyov,
 package maintainers - Leah Neukirchen, Grigory Kirillov, Maciej Barc, 
