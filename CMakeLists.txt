@@ -29,6 +29,11 @@ set(libdir ${CMAKE_INSTALL_FULL_LIBDIR})
 set(includedir ${CMAKE_INSTALL_FULL_INCLUDEDIR})
 set(PACKAGE ${CMAKE_PROJECT_NAME})
 set(PACKAGE_VERSION ${PROJECT_VERSION})
+if(WIN32 AND BUILD_SHARED_LIBS)
+  set(extra_cflags " -DBZIP3_DLL_IMPORT=1")
+else()
+  set(extra_cflags "")
+endif()
 configure_file(bzip3.pc.in ${CMAKE_CURRENT_BINARY_DIR}/bzip3.pc @ONLY)
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/bzip3.pc
         DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig)
@@ -45,6 +50,10 @@ else()
 endif()
 target_sources(bz3 PRIVATE src/libbz3.c)
 target_compile_definitions(bz3 PUBLIC VERSION="${PROJECT_VERSION}")
+if(WIN32 AND BUILD_SHARED_LIBS)
+  target_compile_definitions(bz3 PRIVATE BZIP3_DLL_EXPORT=1)
+  target_compile_definitions(bz3 INTERFACE BZIP3_DLL_IMPORT=1)
+endif()
 target_include_directories(
   bz3
   PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -77,6 +86,7 @@ endif()
 install(
   TARGETS bz3
   EXPORT ${CMAKE_PROJECT_NAME}-config
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
   ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
   LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
   PUBLIC_HEADER DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
