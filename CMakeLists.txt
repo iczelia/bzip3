@@ -11,7 +11,7 @@ set(CMAKE_C_STANDARD 99)
 
 option(BUILD_SHARED_LIBS "Build libbz3 as a shared library" ON)
 option(BZIP3_BUILD_APPS "Build bzip3 applications" ON)
-if(WIN32)
+if(WIN32 AND NOT (MINGW OR CYGWIN))
   set(BZIP3_ENABLE_PTHREAD_DEFAULT OFF)
 else()
   set(BZIP3_ENABLE_PTHREAD_DEFAULT ON)
