@@ -1,0 +1,5 @@
+if(@BZIP3_ENABLE_PTHREAD@)
+  include(CMakeFindDependencyMacro)
+  find_dependency(Threads)
+endif()
+include("${CMAKE_CURRENT_LIST_DIR}/bzip3-targets.cmake")
