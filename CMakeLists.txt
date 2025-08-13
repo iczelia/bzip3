@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.13 FATAL_ERROR)
 
 project(
   bzip3
-  VERSION 1.5.2
+  VERSION 1.5.3
   DESCRIPTION "A better and stronger spiritual successor to BZip2"
   HOMEPAGE_URL "https://github.com/iczelia/bzip3"
   LANGUAGES C)
