@@ -128,3 +128,12 @@ v1.5.2:
 * yarg: oom handling; stop relying on (GNU) asprintf, use the baked in variant.
 * pkg-config: Add License variable
 * bz3_decompress (API): fix a memory leak
+
+v1.5.3:
+* fix oom handling in main.c and yarg.h.
+* cmake build fixes for non-unix platforms:
+  * disable pthreads by default on windows & !mingw
+  * fix handling of dlls on windows.
+  * add missing find_dependency call to ensure Threads::threads is present in downstream find_package callers.
+* the project moved to https://github.com/iczelia/bzip3.
+
