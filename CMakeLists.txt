@@ -141,15 +141,17 @@ if(BZIP3_BUILD_APPS)
         bz3most.1
         bzip3.1)
     foreach(BZIP3_MAN ${BZIP3_MANS})
-      if(EXISTS ${BZIP3_MAN}.in)
+      if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/${BZIP3_MAN}.in)
         string(TIMESTAMP MAN_DATE "%d %B %Y" UTC)
         set(TRANSFORMED_PACKAGE_NAME ${CMAKE_PROJECT_NAME})
         set(MAN_DATE ${MAN_DATE})
         set(VERSION ${PROJECT_VERSION})
-        configure_file(${BZIP3_MAN}.in ${CMAKE_CURRENT_BINARY_DIR}/${BZIP3_MAN}
+        configure_file(${CMAKE_CURRENT_SOURCE_DIR}/${BZIP3_MAN}.in
+		       ${CMAKE_CURRENT_BINARY_DIR}/${BZIP3_MAN}
                        @ONLY)
       else()
-        configure_file(${BZIP3_MAN} ${CMAKE_CURRENT_BINARY_DIR}/${BZIP3_MAN}
+        configure_file(${CMAKE_CURRENT_SOURCE_DIR}/${BZIP3_MAN}
+		       ${CMAKE_CURRENT_BINARY_DIR}/${BZIP3_MAN}
                        COPYONLY)
       endif()
       install(FILES ${CMAKE_CURRENT_BINARY_DIR}/${BZIP3_MAN}
