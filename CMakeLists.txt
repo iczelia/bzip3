@@ -82,9 +82,9 @@ endif()
 set_target_properties(
   bz3
   PROPERTIES OUTPUT_NAME bzip3
-             SOVERSION "0.0.0"
+             SOVERSION "1"
              PUBLIC_HEADER include/libbz3.h
-             VERSION "0")
+             VERSION "1.0.0")
 if(BUILD_SHARED_LIBS)
   set_target_properties(bz3 PROPERTIES POSITION_INDEPENDENT_CODE ON)
 endif()
