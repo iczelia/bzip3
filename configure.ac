@@ -34,6 +34,7 @@ AM_CONDITIONAL([ENABLE_ARCH_NATIVE], [test x"$enable_arch_native" != xno])
 AC_ARG_ENABLE([static-exe],
 			AS_HELP_STRING([--enable-static-exe], [Enable static builds of the executable.]))
 AM_CONDITIONAL([ENABLE_STATIC], [test x"$enable_static_exe" = xyes])
+AC_SUBST([extra_cflags], [])
 
 AM_COND_IF([PASSED_CFLAGS], [
 	AC_MSG_NOTICE([skipping compiler feature detection, using '$CFLAGS'])
