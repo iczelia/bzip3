@@ -80,7 +80,7 @@ files in the current directory.
 .TP
 .B \-b --block N
 Set the block size to N mebibytes. The minimum is 1MiB, the maximum is
-511MiB.
+511MiB. The default is 16MiB.
 .TP
 .B \-c --stdout
 Force writing output data to the standard output if one file is
@@ -99,7 +99,8 @@ Overwrite existing files.
 Display a help message and exit.
 .TP
 .B \-j --jobs N
-Set the amount of parallel worker threads that process one block each.
+Set the amount of parallel worker threads that process one block each. Default
+is to use 1 worker thread.
 .TP
 .B \--rm
 Remove the input files after successful compression or decompression. This is
