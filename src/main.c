@@ -68,7 +68,7 @@ static void help() {
             "  -b N, --block=N   set block size in MiB {16}\n"
             "  -B, --batch       process all files specified as inputs\n"
 #ifdef PTHREAD
-            "  -j N, --jobs=N    set the amount of parallel threads\n"
+            "  -j N, --jobs=N    set the amount of parallel threads {1}\n"
 #endif
             "\n"
             "Report bugs to: https://github.com/iczelia/bzip3\n");
