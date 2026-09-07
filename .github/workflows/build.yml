@@ -89,6 +89,9 @@ jobs:
           apt install -q -y clang gcc make
         run: |
           cd /bzip3
+          if [ ${{ matrix.arch }} = armv6 -a ${{ matrix.compiler }} = clang ]; then
+            export CFLAGS='-march=armv6'  # or we get "Illegal instruction" crashes
+          fi
           ./configure CC=${{ matrix.compiler }} --${{ matrix.feature }} --disable-arch-native --disable-link-time-optimization
           make && make roundtrip test
   build-archs-ubuntu:
