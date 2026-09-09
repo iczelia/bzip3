@@ -12,7 +12,7 @@ jobs:
     name: Package
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v7
     - name: Configure
       run: |
         ./bootstrap.sh
@@ -141,7 +141,7 @@ jobs:
     name: Build with CMake
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v7
     - name: CMake
       run: cmake -B build
     - name: Make
