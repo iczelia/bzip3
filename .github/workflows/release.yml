@@ -29,7 +29,7 @@ jobs:
         run: |
           ./bzip3 -e bzip3-${{ github.ref_name }}.tar
       - name: Publish Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             bzip3-${{ github.ref_name }}.tar
@@ -76,7 +76,7 @@ jobs:
           make
           make DESTDIR=$(pwd)/output install-exec
       - name: Publish binary
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             output/bzip3-${{ matrix.target[0] }}*
