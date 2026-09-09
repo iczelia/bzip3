@@ -59,7 +59,7 @@ jobs:
           - [ "i686", "CC=i686-w64-mingw32-gcc --host i686-w64-mingw32 --enable-static-exe --disable-arch-native", "gcc-mingw-w64-i686" ]
     steps:
       - name: Download source package artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: bzip3-${{ github.ref_name }}
       - name: Extract source package
