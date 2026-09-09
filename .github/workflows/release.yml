@@ -41,7 +41,7 @@ jobs:
             bzip3-${{ github.ref_name }}.tar.zst
             bzip3-${{ github.ref_name }}.zip
       - name: Upload source package artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: bzip3-${{ github.ref_name }}
           path: bzip3-${{ github.ref_name }}.tar.gz
