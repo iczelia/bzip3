@@ -669,8 +669,14 @@ BZIP3_API s32 bz3_decode_block(struct bz3_state * state, u8 * buffer, size_t buf
         return -1;
     }
 
+    // The original size can never exceed the block size, regardless of the block type.
+    if (orig_size > state->block_size || orig_size < 0) {
+        state->last_error = BZ3_ERR_MALFORMED_HEADER;
+        return -1;
+    }
+
     if (bwt_idx == -1) {
-        if (compressed_size - 8 > 64 || compressed_size < 8) {
+        if (compressed_size - 8 > 64 || compressed_size < 8 || compressed_size - 8 != orig_size) {
             state->last_error = BZ3_ERR_MALFORMED_HEADER;
             return -1;
         }
@@ -709,11 +715,6 @@ BZIP3_API s32 bz3_decode_block(struct bz3_state * state, u8 * buffer, size_t buf
 
     if (((model & 2) && (lzp_size > bz3_bound(state->block_size) || lzp_size < 0)) ||
         ((model & 4) && (rle_size > bz3_bound(state->block_size) || rle_size < 0))) {
-        state->last_error = BZ3_ERR_MALFORMED_HEADER;
-        return -1;
-    }
-
-    if (orig_size > bz3_bound(state->block_size) || orig_size < 0) {
         state->last_error = BZ3_ERR_MALFORMED_HEADER;
         return -1;
     }
@@ -793,7 +794,8 @@ BZIP3_API s32 bz3_decode_block(struct bz3_state * state, u8 * buffer, size_t buf
 
     state->last_error = BZ3_OK;
 
-    if (size_src > state->block_size || size_src < 0) {
+    // Callers rely on orig_size bytes of `buffer' being initialised with decoded data.
+    if (size_src > state->block_size || size_src < 0 || size_src != orig_size) {
         state->last_error = BZ3_ERR_MALFORMED_HEADER;
         return -1;
     }
@@ -969,7 +971,7 @@ BZIP3_API int bz3_decompress(const uint8_t * in, uint8_t * out, size_t in_size, 
             return BZ3_ERR_TRUNCATED_DATA;
         }
         s32 orig_size = read_neutral_s32(in + 4);
-        if (orig_size < 0) goto malformed_header;
+        if (orig_size < 0 || orig_size > (s32)block_size) goto malformed_header;
         if (buf_max < *out_size + orig_size) {
             bz3_free(state);
             free(compression_buf);

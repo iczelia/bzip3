@@ -112,6 +112,11 @@ static void xread_noeof(void * data, size_t size, size_t len, FILE * des) {
     }
 }
 
+/* Validate the compressed and original sizes stored in a block header. */
+static int valid_block_header(s32 new_size, s32 old_size, s32 block_size) {
+    return new_size >= 0 && (size_t)new_size <= bz3_bound(block_size) && old_size >= 0 && old_size <= block_size;
+}
+
 static void close_out_file(FILE * des) {
     if (des) {
         int outfd = fileno(des);
@@ -262,7 +267,7 @@ static int process(FILE * input_des, FILE * output_des, int mode, int block_size
                 new_size = read_neutral_s32(byteswap_buf);
                 xread_noeof(&byteswap_buf, 1, 4, input_des);
                 old_size = read_neutral_s32(byteswap_buf);
-                if (old_size > bz3_bound(block_size) || new_size > bz3_bound(block_size)) {
+                if (!valid_block_header(new_size, old_size, block_size)) {
                     fprintf(stderr, "Failed to decode a block: Inconsistent headers.\n");
                     return 1;
                 }
@@ -284,7 +289,7 @@ static int process(FILE * input_des, FILE * output_des, int mode, int block_size
                 new_size = read_neutral_s32(byteswap_buf);
                 xread_noeof(&byteswap_buf, 1, 4, input_des);
                 old_size = read_neutral_s32(byteswap_buf);
-                if (old_size > bz3_bound(block_size) || new_size > bz3_bound(block_size)) {
+                if (!valid_block_header(new_size, old_size, block_size)) {
                     fprintf(stderr, "Failed to decode a block: Inconsistent headers.\n");
                     return 1;
                 }
@@ -304,7 +309,7 @@ static int process(FILE * input_des, FILE * output_des, int mode, int block_size
                 new_size = read_neutral_s32(byteswap_buf);
                 xread_noeof(&byteswap_buf, 1, 4, input_des);
                 old_size = read_neutral_s32(byteswap_buf);
-                if (old_size > bz3_bound(block_size) || new_size > bz3_bound(block_size)) {
+                if (!valid_block_header(new_size, old_size, block_size)) {
                     fprintf(stderr, "Failed to decode a block: Inconsistent headers.\n");
                     return 1;
                 }
@@ -385,7 +390,7 @@ static int process(FILE * input_des, FILE * output_des, int mode, int block_size
                     sizes[i] = read_neutral_s32(byteswap_buf);
                     xread_noeof(&byteswap_buf, 1, 4, input_des);
                     old_sizes[i] = read_neutral_s32(byteswap_buf);
-                    if (old_sizes[i] > bz3_bound(block_size) || sizes[i] > bz3_bound(block_size)) {
+                    if (!valid_block_header(sizes[i], old_sizes[i], block_size)) {
                         fprintf(stderr, "Failed to decode a block: Inconsistent headers.\n");
                         return 1;
                     }
@@ -413,7 +418,7 @@ static int process(FILE * input_des, FILE * output_des, int mode, int block_size
                     sizes[i] = read_neutral_s32(byteswap_buf);
                     xread_noeof(&byteswap_buf, 1, 4, input_des);
                     old_sizes[i] = read_neutral_s32(byteswap_buf);
-                    if (old_sizes[i] > bz3_bound(block_size) || sizes[i] > bz3_bound(block_size)) {
+                    if (!valid_block_header(sizes[i], old_sizes[i], block_size)) {
                         fprintf(stderr, "Failed to decode a block: Inconsistent headers.\n");
                         return 1;
                     }
@@ -440,7 +445,7 @@ static int process(FILE * input_des, FILE * output_des, int mode, int block_size
                     sizes[i] = read_neutral_s32(byteswap_buf);
                     xread_noeof(&byteswap_buf, 1, 4, input_des);
                     old_sizes[i] = read_neutral_s32(byteswap_buf);
-                    if (old_sizes[i] > bz3_bound(block_size) || sizes[i] > bz3_bound(block_size)) {
+                    if (!valid_block_header(sizes[i], old_sizes[i], block_size)) {
                         fprintf(stderr, "Failed to decode a block: Inconsistent headers.\n");
                         return 1;
                     }
