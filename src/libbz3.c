@@ -214,16 +214,18 @@ static s32 lzp_decode_block(const u8 * RESTRICT in, const u8 * in_end, s32 * RES
             // SAFETY: 'in' is advanced here, but it may have been at last index in the case of untrusted bad data.
             if (UNLIKELY(in == in_end)) return -1;
             if (*in != 255) {
+                // SAFETY: the match is clamped to the remaining output space anyway, so stop
+                // accumulating once past it. This keeps `len' from overflowing on untrusted data.
+                const s32 max_len = (s32)(out_end - out);
                 s32 len = LZP_MIN_MATCH;
                 while (1) {
                     if (UNLIKELY(in == in_end)) return -1;
-                    len += *in;
+                    if (LIKELY(len <= max_len)) len += *in;
                     if (*in++ != 254) break;
                 }
 
                 const u8 * ref = outs + val;
-                const u8 * oe = out + len;
-                if (UNLIKELY(oe > out_end)) oe = out_end;
+                const u8 * oe = UNLIKELY(len > max_len) ? out_end : out + len;
 
                 while (out < oe) *out++ = *ref++;
 
@@ -317,9 +319,14 @@ static int mrled(u8 * RESTRICT in, u8 * RESTRICT out, s32 outlen, s32 maxin) {
     while (op < outlen && ip < maxin) {
         c = in[ip++];
         if (t[c]) {
-            for (run = 0; ip < maxin && (pc = in[ip++]) == 255; run += 255)
-                ;
-            run += pc + 1;
+            // SAFETY: the run is clamped to outlen anyway, so stop accumulating once past it.
+            // This keeps `run' from overflowing on untrusted data. A truncated run is malformed.
+            run = 1;
+            do {
+                if (UNLIKELY(ip >= maxin)) return 1;
+                pc = in[ip++];
+                if (LIKELY(run <= outlen)) run += pc;
+            } while (pc == 255);
             for (; run > 0 && op < outlen; --run) out[op++] = c;
         } else
             out[op++] = c;
