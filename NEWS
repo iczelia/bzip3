@@ -137,3 +137,18 @@ v1.5.3:
   * add missing find_dependency call to ensure Threads::threads is present in downstream find_package callers.
 * the project moved to https://github.com/iczelia/bzip3.
 
+
+v1.5.4:
+* bz3_decompress (API): accept blocks whose compressed size exceeds the block size (up to `bz3_bound`) (#174).
+* bz3_compress (API): fix the size of the last block when the input size is a multiple of the block size (#175).
+* autoconf: define the `extra_cflags` variable.
+* cmake: fix out-of-source builds of the man pages.
+* cmake: set the same soname as the autotools build.
+* man page: document the default values of `--jobs` and `--block`.
+
+v1.5.5:
+* bz3_decode_block (API): stricter validation of the original size stored in block headers; reject blocks whose
+  decoded size does not match the header.
+* bz3_decompress (API) and the CLI: reject block headers with negative sizes or original sizes exceeding the block size.
+* lzp/rle decoders: fix integer overflows in match and run length accumulation on malformed input (#191, #192).
+* ci: weekly scheduled builds, dependabot for GitHub Actions, fix clang builds on armv6.
