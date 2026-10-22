@@ -90,7 +90,7 @@ jobs:
           --volume "${PWD}:/bzip3"
         install: |
           apt update -q -y
-          apt install -q -y clang gcc make
+          apt install -q -y clang gcc make pkg-config
         run: |
           cd /bzip3
           if [ ${{ matrix.arch }} = armv6 -a ${{ matrix.compiler }} = clang ]; then
@@ -131,7 +131,7 @@ jobs:
           --volume "${PWD}:/bzip3"
         install: |
           apt update -q -y
-          apt install -q -y clang gcc make
+          apt install -q -y clang gcc make pkg-config
         run: |
           cd /bzip3
           ./configure CC=${{ matrix.compiler }} --${{ matrix.feature }} --disable-arch-native --disable-link-time-optimization
