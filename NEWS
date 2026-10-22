@@ -152,3 +152,7 @@ v1.5.5:
 * bz3_decompress (API) and the CLI: reject block headers with negative sizes or original sizes exceeding the block size.
 * lzp/rle decoders: fix integer overflows in match and run length accumulation on malformed input (#191, #192).
 * ci: weekly scheduled builds, dependabot for GitHub Actions, fix clang builds on armv6.
+
+v1.5.6:
+* bz3_bound (API): increase the constant slack from 32 to 50 bytes. Previously, `bz3_compress` could write up
+  to 4 bytes past an output buffer of exactly `bz3_bound(in_size)` bytes for small, incompressible inputs.
