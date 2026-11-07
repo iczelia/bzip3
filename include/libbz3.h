@@ -92,7 +92,7 @@ BZIP3_API size_t bz3_bound(size_t input_size);
 
 /**
  * @brief Compress a frame. This function does not support parallelism
- * by itself, consider using the low level `bz3_encode_blocks()` function instead.
+ * by itself, consider using `bz3_compress_mt()` instead.
  * Using the low level API might provide better performance.
  * Returns a bzip3 error code; BZ3_OK when the operation is successful.
  * Make sure to set out_size to the size of the output buffer before the operation;
@@ -102,12 +102,42 @@ BZIP3_API int bz3_compress(uint32_t block_size, const uint8_t * in, uint8_t * ou
 
 /**
  * @brief Decompress a frame. This function does not support parallelism
- * by itself, consider using the low level `bz3_decode_blocks()` function instead.
+ * by itself, consider using `bz3_decompress_mt()` instead.
  * Using the low level API might provide better performance.
  * Returns a bzip3 error code; BZ3_OK when the operation is successful.
  * Make sure to set out_size to the size of the output buffer before the operation.
  */
 BZIP3_API int bz3_decompress(const uint8_t * in, uint8_t * out, size_t in_size, size_t * out_size);
+
+/**
+ * @brief Compress a frame like `bz3_compress()', encoding up to `threads' blocks in parallel.
+ * The output is identical to that of `bz3_compress()' with the same block size, whatever the number
+ * of threads. The calling thread takes part in the work, alongside up to `threads' - 1 new threads,
+ * and at most one thread per block is used.
+ * Parameters and return values are the same as those of `bz3_compress()'.
+ *
+ * Each thread allocates its own block state and buffer, so the memory usage is about `threads' times
+ * that of `bz3_compress()'.
+ *
+ * When `threads' is 1 or less, the frame has a single block, or the library was built without
+ * pthread support, this function is equivalent to `bz3_compress()'.
+ */
+BZIP3_API int bz3_compress_mt(uint32_t block_size, const uint8_t * in, uint8_t * out, size_t in_size,
+                              size_t * out_size, int threads);
+
+/**
+ * @brief Decompress a frame like `bz3_decompress()', decoding up to `threads' blocks in parallel.
+ * Parameters and return values are the same as those of `bz3_decompress()'. When several blocks are
+ * invalid, the error of the first one is returned and out_size is set to the size of the output that
+ * precedes it, as `bz3_decompress()' does; the rest of the output buffer is unspecified on error.
+ *
+ * Threads and memory usage are the same as those of `bz3_compress_mt()'. As the memory is allocated
+ * for each thread according to the block size stored in the frame header, the memory needed to decode
+ * untrusted data can be up to `threads' times that of `bz3_decompress()'. When `threads' is 1 or less,
+ * the frame has a single block, or the library was built without pthread support, this function is
+ * equivalent to `bz3_decompress()'.
+ */
+BZIP3_API int bz3_decompress_mt(const uint8_t * in, uint8_t * out, size_t in_size, size_t * out_size, int threads);
 
 /**
  * @brief Calculate the minimal memory required for compression with the given block size.
@@ -155,6 +185,11 @@ BZIP3_API int bz3_decompress(const uint8_t * in, uint8_t * out, size_t in_size, 
  *      in addition to the memory amount returned by this method call and libsais.
  *    - Everything is freed after compression completes
  * 
+ * 3. bz3_compress_mt() / bz3_decompress_mt():
+ *    - Allocate, for each thread, the memory amount returned by this method call and
+ *      a temporary compression buffer (bz3_bound(block_size) bytes).
+ *    - Everything is freed after the operation completes
+ *
  * Memory remains constant during operation, with except of some small allocations from libsais during
  * BWT stage. That is not accounted by this function, though it usually amounts to ~16KiB, negligible.
  * The worst case of BWT is 2*block_size technically speaking.

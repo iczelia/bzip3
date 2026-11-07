@@ -882,9 +882,14 @@ BZIP3_API void bz3_decode_blocks(struct bz3_state * states[], u8 * buffers[], si
 
 /* High level API implementations. */
 
-BZIP3_API int bz3_compress(u32 block_size, const u8 * const in, u8 * out, size_t in_size, size_t * out_size) {
+/* The block size of a frame of `in_size' bytes compressed with the requested `block_size'. */
+static u32 bz3_frame_block_size(u32 block_size, size_t in_size) {
     if (block_size > in_size) block_size = bz3_bound(in_size);
-    block_size = block_size <= KiB(65) ? KiB(65) : block_size;
+    return block_size <= KiB(65) ? KiB(65) : block_size;
+}
+
+BZIP3_API int bz3_compress(u32 block_size, const u8 * const in, u8 * out, size_t in_size, size_t * out_size) {
+    block_size = bz3_frame_block_size(block_size, in_size);
 
     struct bz3_state * state = bz3_new(block_size);
     if (!state) return BZ3_ERR_INIT;
@@ -1002,6 +1007,258 @@ BZIP3_API int bz3_decompress(const uint8_t * in, uint8_t * out, size_t in_size, 
     free(compression_buf);
 
     return BZ3_OK;
+}
+
+#ifdef PTHREAD
+
+/* A bz3_compress_mt() or bz3_decompress_mt() call, shared by its workers. The workers take the blocks in order. */
+struct bz3_mt_job {
+    pthread_mutex_t lock;
+    pthread_cond_t turn;  // compression: broadcast when next_write advances or an error is set
+    const u8 * in;
+    u8 * out;
+    size_t in_size;
+    size_t in_pos;   // decompression: offset of the next block header in `in'
+    size_t out_pos;  // end of the output reserved so far
+    size_t out_max;
+    u32 block_size;
+    u32 n_blocks;
+    u32 next_block;  // the next block to take
+    u32 next_write;  // compression: the next block to append to `out'
+    int error;       // the error of the first failing block, in block order
+    u32 error_block;
+    size_t error_out_pos;  // decompression: the output size before the failing block
+};
+
+struct bz3_mt_worker {
+    struct bz3_mt_job * job;
+    struct bz3_state * state;
+    u8 * buffer;
+    size_t buffer_size;
+};
+
+/* Called with job->lock held. Keeps the error of the first failing block, as the sequential functions do. */
+static void bz3_mt_fail(struct bz3_mt_job * job, int error, u32 block, size_t out_pos) {
+    if (job->error == BZ3_OK || block < job->error_block) {
+        job->error = error;
+        job->error_block = block;
+        job->error_out_pos = out_pos;
+    }
+}
+
+static void * bz3_compress_worker(void * arg) {
+    struct bz3_mt_worker * w = arg;
+    struct bz3_mt_job * job = w->job;
+    for (;;) {
+        pthread_mutex_lock(&job->lock);
+        if (job->error != BZ3_OK || job->next_block == job->n_blocks) {
+            pthread_mutex_unlock(&job->lock);
+            return NULL;
+        }
+        u32 i = job->next_block++;
+        pthread_mutex_unlock(&job->lock);
+
+        size_t in_pos = (size_t)i * job->block_size;
+        s32 size = (s32)(i == job->n_blocks - 1 ? job->in_size - in_pos : job->block_size);
+        memcpy(w->buffer, job->in + in_pos, size);
+        s32 out_size_block = bz3_encode_block(w->state, w->buffer, size);
+        int error = bz3_last_error(w->state);
+
+        // Append the blocks in order, as bz3_compress() writes them: wait for the previous ones.
+        pthread_mutex_lock(&job->lock);
+        while (job->next_write != i && job->error == BZ3_OK) pthread_cond_wait(&job->turn, &job->lock);
+        if (job->error != BZ3_OK) {  // a previous block failed
+            pthread_mutex_unlock(&job->lock);
+            return NULL;
+        }
+        if (error == BZ3_OK && job->out_max - job->out_pos < (size_t)out_size_block + 8) error = BZ3_ERR_DATA_TOO_BIG;
+        if (error != BZ3_OK) {
+            bz3_mt_fail(job, error, i, job->out_pos);
+            pthread_cond_broadcast(&job->turn);
+            pthread_mutex_unlock(&job->lock);
+            return NULL;
+        }
+        u8 * out = job->out + job->out_pos;
+        job->out_pos += out_size_block + 8;
+        job->next_write++;
+        pthread_cond_broadcast(&job->turn);
+        pthread_mutex_unlock(&job->lock);
+
+        write_neutral_s32(out, out_size_block);
+        write_neutral_s32(out + 4, size);
+        memcpy(out + 8, w->buffer, out_size_block);
+    }
+}
+
+static void * bz3_decompress_worker(void * arg) {
+    struct bz3_mt_worker * w = arg;
+    struct bz3_mt_job * job = w->job;
+    for (;;) {
+        // Take the next block and check its header as bz3_decompress() does.
+        pthread_mutex_lock(&job->lock);
+        if (job->error != BZ3_OK || job->next_block == job->n_blocks) {
+            pthread_mutex_unlock(&job->lock);
+            return NULL;
+        }
+        u32 i = job->next_block++;
+        const u8 * in = job->in + job->in_pos;
+        size_t in_size = job->in_size - job->in_pos;
+        size_t out_pos = job->out_pos;
+        s32 size = 0, orig_size = 0;
+        int error = BZ3_OK;
+        if (in_size < 8) {
+            error = BZ3_ERR_MALFORMED_HEADER;
+        } else {
+            size = read_neutral_s32(in);
+            orig_size = read_neutral_s32(in + 4);
+            if (size < 0 || size > (s32)bz3_bound(job->block_size))
+                error = BZ3_ERR_MALFORMED_HEADER;
+            else if (in_size < (size_t)size + 8)
+                error = BZ3_ERR_TRUNCATED_DATA;
+            else if (orig_size < 0 || orig_size > (s32)job->block_size)
+                error = BZ3_ERR_MALFORMED_HEADER;
+            else if (job->out_max - out_pos < (size_t)orig_size)
+                error = BZ3_ERR_DATA_TOO_BIG;
+        }
+        if (error != BZ3_OK) {
+            bz3_mt_fail(job, error, i, out_pos);
+            pthread_mutex_unlock(&job->lock);
+            return NULL;
+        }
+        job->in_pos += size + 8;
+        job->out_pos += orig_size;
+        pthread_mutex_unlock(&job->lock);
+
+        memcpy(w->buffer, in + 8, size);
+        bz3_decode_block(w->state, w->buffer, w->buffer_size, size, orig_size);
+        error = bz3_last_error(w->state);
+        if (error != BZ3_OK) {
+            pthread_mutex_lock(&job->lock);
+            bz3_mt_fail(job, error, i, out_pos);
+            pthread_mutex_unlock(&job->lock);
+            return NULL;
+        }
+        memcpy(job->out + out_pos, w->buffer, orig_size);
+    }
+}
+
+/* Runs `worker' on the calling thread and on up to `threads' - 1 new ones, each with its own state and buffer. */
+static int bz3_mt_run(struct bz3_mt_job * job, int threads, void * (*worker)(void *)) {
+    struct bz3_mt_worker * workers = calloc(threads, sizeof(struct bz3_mt_worker));
+    pthread_t * tids = malloc(threads * sizeof(pthread_t));
+    int error = BZ3_OK, n_workers = 0;
+    if (!workers || !tids) {
+        error = BZ3_ERR_INIT;
+        goto cleanup;
+    }
+    for (; n_workers < threads; n_workers++) {
+        struct bz3_mt_worker * w = &workers[n_workers];
+        w->job = job;
+        w->buffer_size = bz3_bound(job->block_size);
+        w->state = bz3_new(job->block_size);
+        w->buffer = w->state ? malloc(w->buffer_size) : NULL;
+        if (!w->buffer) {
+            if (w->state) bz3_free(w->state);
+            error = BZ3_ERR_INIT;
+            goto cleanup;
+        }
+    }
+    if (pthread_mutex_init(&job->lock, NULL)) {
+        error = BZ3_ERR_INIT;
+        goto cleanup;
+    }
+    if (pthread_cond_init(&job->turn, NULL)) {
+        pthread_mutex_destroy(&job->lock);
+        error = BZ3_ERR_INIT;
+        goto cleanup;
+    }
+    // Fewer threads than requested only slow the work down.
+    int started = 1;
+    while (started < threads && !pthread_create(&tids[started], NULL, worker, &workers[started])) started++;
+    worker(&workers[0]);
+    for (int t = 1; t < started; t++) pthread_join(tids[t], NULL);
+    pthread_cond_destroy(&job->turn);
+    pthread_mutex_destroy(&job->lock);
+cleanup:
+    for (int t = 0; t < n_workers; t++) {
+        bz3_free(workers[t].state);
+        free(workers[t].buffer);
+    }
+    free(workers);
+    free(tids);
+    return error;
+}
+
+#endif
+
+BZIP3_API int bz3_compress_mt(u32 block_size, const u8 * const in, u8 * out, size_t in_size, size_t * out_size,
+                              int threads) {
+#ifdef PTHREAD
+    u32 frame_block_size = bz3_frame_block_size(block_size, in_size);
+    u32 n_blocks = in_size / frame_block_size;
+    if (in_size % frame_block_size) n_blocks++;
+
+    if (threads > 1 && n_blocks > 1) {
+        if ((u32)threads > n_blocks) threads = n_blocks;
+
+        size_t buf_max = *out_size;
+        *out_size = 0;
+        if (buf_max < 13 || buf_max < bz3_bound(in_size)) return BZ3_ERR_DATA_TOO_BIG;
+
+        out[0] = 'B';
+        out[1] = 'Z';
+        out[2] = '3';
+        out[3] = 'v';
+        out[4] = '1';
+        write_neutral_s32(out + 5, frame_block_size);
+        write_neutral_s32(out + 9, n_blocks);
+
+        struct bz3_mt_job job;
+        memset(&job, 0, sizeof(job));
+        job.in = in;
+        job.in_size = in_size;
+        job.out = out;
+        job.out_pos = 13;
+        job.out_max = buf_max;
+        job.block_size = frame_block_size;
+        job.n_blocks = n_blocks;
+        job.error = BZ3_OK;
+        int error = bz3_mt_run(&job, threads, bz3_compress_worker);
+        if (error != BZ3_OK) return error;
+        *out_size = job.out_pos;
+        return job.error;
+    }
+#endif
+    (void)threads;
+    return bz3_compress(block_size, in, out, in_size, out_size);
+}
+
+BZIP3_API int bz3_decompress_mt(const u8 * in, u8 * out, size_t in_size, size_t * out_size, int threads) {
+#ifdef PTHREAD
+    if (threads > 1 && in_size >= 13 && in[0] == 'B' && in[1] == 'Z' && in[2] == '3' && in[3] == 'v' && in[4] == '1') {
+        u32 block_size = read_neutral_s32(in + 5);
+        u32 n_blocks = read_neutral_s32(in + 9);
+        if (n_blocks > 1) {
+            if ((u32)threads > n_blocks) threads = n_blocks;
+
+            struct bz3_mt_job job;
+            memset(&job, 0, sizeof(job));
+            job.in = in + 13;
+            job.in_size = in_size - 13;
+            job.out = out;
+            job.out_max = *out_size;
+            job.block_size = block_size;
+            job.n_blocks = n_blocks;
+            job.error = BZ3_OK;
+            int error = bz3_mt_run(&job, threads, bz3_decompress_worker);
+            if (error != BZ3_OK) return error;
+            *out_size = job.error == BZ3_OK ? job.out_pos : job.error_out_pos;
+            return job.error;
+        }
+    }
+#endif
+    (void)threads;
+    return bz3_decompress(in, out, in_size, out_size);
 }
 
 BZIP3_API size_t bz3_min_memory_needed(int32_t block_size) {

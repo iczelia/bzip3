@@ -156,3 +156,5 @@ v1.5.5:
 v1.5.6:
 * bz3_bound (API): increase the constant slack from 32 to 50 bytes. Previously, `bz3_compress` could write up
   to 4 bytes past an output buffer of exactly `bz3_bound(in_size)` bytes for small, incompressible inputs.
+* bz3_compress_mt, bz3_decompress_mt (API): multi-threaded in-memory compression and decompression. The output of
+  `bz3_compress_mt` is identical to that of `bz3_compress` with the same block size (#171).
