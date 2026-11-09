@@ -1,19 +1,24 @@
 ACLOCAL_AMFLAGS = -I build-aux
 
-AM_CFLAGS = -I$(top_srcdir)/include
+AM_CFLAGS = -I$(top_srcdir)/include -I$(top_srcdir)/src -I$(top_srcdir)/3rdparty/libsais
 
-EXTRA_DIST = LICENSE 3rdparty/libsais-LICENSE PORTING.md README.md build-aux/git-version-gen CMakeLists.txt
+EXTRA_DIST = LICENSE NEWS PORTING.md README.md bootstrap.sh build-aux/git-version-gen \
+	CMakeLists.txt bzip3-config.cmake.in \
+	doc/bzip3_format.md doc/overview.md \
+	3rdparty/libsais/LICENSE 3rdparty/libsais/libsais.c \
+	$(BZ3_GOLDEN_FILES) tests/cli.sh tests/symbols.sh
 
 pkgconfig_DATA = bzip3.pc
 
 include_HEADERS = include/libbz3.h
 noinst_HEADERS = include/common.h \
-						 include/libsais.h \
-						 include/yarg.h
+				 include/yarg.h \
+				 src/sais.h \
+				 3rdparty/libsais/libsais.h
 
 lib_LTLIBRARIES = libbzip3.la
 libbzip3_la_SOURCES = src/libbz3.c
-libbzip3_la_LDFLAGS = -no-undefined -version-info 1:0:0
+libbzip3_la_LDFLAGS = -no-undefined -version-info 1:1:0
 
 bin_PROGRAMS = bzip3
 bzip3_CFLAGS = $(AM_CFLAGS)
@@ -56,17 +61,38 @@ _BRANCH_REF != $(AWK) '{print ".git/" $$2}' .git/HEAD 2>/dev/null ||:
 dist-hook:
 	printf "$(VERSION)" > "$(distdir)/.tarball-version"
 
+# Files compressed by an older release; decoding them guards the backwards compatibility of the decoder.
+BZ3_GOLDEN_FILES = tests/data/binary.bin tests/data/binary.bin.bz3 \
+	tests/data/lzp.txt tests/data/lzp.txt.bz3 \
+	tests/data/plain.txt tests/data/plain.txt.bz3 \
+	tests/data/rle.bin tests/data/rle.bin.bz3 \
+	tests/data/rle-lzp.bin tests/data/rle-lzp.bin.bz3 \
+	tests/data/stored.bin tests/data/stored.bin.bz3
+
+check_PROGRAMS = tests/api
+tests_api_SOURCES = tests/api.c
+tests_api_LDADD = libbzip3.la
+
+TEST_EXTENSIONS = .sh
+SH_LOG_COMPILER = $(SHELL)
+AM_TESTS_ENVIRONMENT = \
+	BZIP3='$(abs_builddir)/bzip3$(EXEEXT)'; export BZIP3; \
+	BZIP3_TEST_DATA='$(abs_srcdir)/tests/data'; export BZIP3_TEST_DATA; \
+	BZIP3_TEST_LIBS='$(abs_builddir)/.libs/libbzip3.a $(abs_builddir)/.libs/libbzip3.so $(abs_builddir)/.libs/libbzip3.dylib'; \
+	export BZIP3_TEST_LIBS;
+TESTS = tests/api$(EXEEXT) tests/cli.sh tests/symbols.sh
+
 # Begin developer convenience targets
 
 .PHONY: format
-format: $(bzip3_SOURCES) $(libbzip3_la_SOURCES) $(include_HEADERS) $(noinst_HEADERS)
-	clang-format -i $^ examples/*.c
+format: $(bzip3_SOURCES) $(libbzip3_la_SOURCES) include/libbz3.h include/common.h src/sais.h
+	clang-format -i $^ tests/*.c examples/*.c
 
 .PHONY: cloc
 cloc: $(bzip3_SOURCES) $(libbzip3_la_SOURCES) $(include_HEADERS) $(noinst_HEADERS)
 	cloc $^
 
-CLEANFILES += LICENSE2
+CLEANFILES += LICENSE2 LICENSE.bz3
 .PHONY: roundtrip
 
 BZIP3 := bzip3$(EXEEXT)
@@ -78,6 +104,7 @@ roundtrip: $(BZIP3)
 	cmp $(srcdir)/LICENSE $(builddir)/LICENSE2
 	-command -v md5sum >/dev/null 2>&1 && md5sum $(builddir)/LICENSE.bz3
 
+# Needs the examples directory, which is only a part of the git repository.
 .PHONY: test
 test: $(BZIP3)
 	./$(BZIP3) -d < $(srcdir)/examples/shakespeare.txt.bz3 | cmp - $(srcdir)/examples/shakespeare.txt

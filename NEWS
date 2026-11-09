@@ -156,3 +156,40 @@ v1.5.5:
 v1.5.6:
 * bz3_bound (API): increase the constant slack from 32 to 50 bytes. Previously, `bz3_compress` could write up
   to 4 bytes past an output buffer of exactly `bz3_bound(in_size)` bytes for small, incompressible inputs.
+* libsais: update the bundled copy to v2.12.1 and stop patching it. It now lives unmodified in `3rdparty/libsais`
+  and is compiled as a part of `libbz3.c` with internal linkage, so the library still exports only `bz3_*` symbols.
+  The new inverse BWT makes decompression considerably faster.
+* The compressed format is unchanged: files written by older versions decode as before, older versions decode
+  the output of this one, and the encoder output is byte for byte identical.
+* Faster entropy decoder (speculative evaluation of both successor contexts), CRC32C using the SSE4.2/ARMv8
+  instructions where the compiler targets them and slicing-by-8 elsewhere, cheaper RLE and LZP inner loops; the
+  work arrays are no longer cleared for every decoded block.
+* bz3_encode_block (API): fail with BZ3_ERR_DATA_TOO_BIG instead of writing past `bz3_bound(size)` bytes should
+  the entropy coder expand its input beyond that; reject negative sizes.
+* bz3_compress (API): verify the remaining output space for every block.
+* bz3_decode_block (API): reject blocks whose header extends past the compressed data; fix the computation of
+  the header size, which demanded up to 24 bytes more of `buffer_size` than needed.
+* bz3_new (API): fix a NULL pointer dereference when memory allocation fails. bz3_free (API) accepts NULL.
+* bz3_encode_blocks, bz3_decode_blocks (API): handle failures to start a thread (the block is processed on
+  the calling thread) instead of joining a thread that was never created.
+* CLI: `--rm` no longer removes the input file when the operation failed (this also affected batch mode, where
+  failures were ignored altogether); the exit status of batch mode now reflects failures.
+* CLI: an incomplete output file is removed on failure.
+* CLI: output files are created exclusively (no check-then-open race that could be redirected through a
+  planted symbolic link) and with the access permissions of the input file instead of the default ones.
+* CLI: refuse to use the same file as input and output.
+* CLI: reject block sizes and job counts that overflowed `int` instead of silently using a wrapped value
+  (e.g. `-b 4097` meant `-b 1`).
+* CLI: the recovery mode no longer writes uninitialised memory in place of blocks that failed to decode.
+* CLI: threaded compression no longer appends an empty block when the input size is a multiple of the
+  amount of data read per batch.
+* yarg: update the bundled copy to the current upstream (0fbf7c3, now 0BSD-licensed): exact long option names win
+  over prefix matches, arguments to options that take none are rejected, a lone `-` is a positional argument.
+* CLI: `-` as a file name stands for the standard input or output. It used to be dropped silently, which
+  `bz3cat -` and `bz3grep` relied on.
+* Build: `make check` / `ctest` test suite, including reference files compressed by v1.5.5.
+* cmake: derive the version from `.tarball-version` or `git describe`, exactly like the autotools build, instead
+  of a hardcoded number (override with `-DBZIP3_VERSION=`); default to a Release build, stop leaking the `VERSION` and `PTHREAD` definitions to dependents, apply
+  `BZIP3_ENABLE_ARCH_NATIVE` to the compiler (it was passed to the linker only), work as a subproject.
+* autoconf: fall back gracefully when the compiler supports neither `-march=native` nor `-mcpu=native`.
+* The outdated benchmarks were removed.

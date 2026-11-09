@@ -38,6 +38,8 @@ expects at most two filenames intertwined with flags.
 .B @TRANSFORMED_PACKAGE_NAME@
 will by default not overwrite existing files.
 If this behaviour is intended, use the \-f flag.
+Output files are created with the access permissions of the input file.
+If an operation fails, the incomplete output file is removed.
 
 If no file names are specified,
 .B @TRANSFORMED_PACKAGE_NAME@
@@ -104,7 +106,8 @@ is to use 1 worker thread.
 .TP
 .B \--rm
 Remove the input files after successful compression or decompression. This is
-silently ignored if output is stdout.
+silently ignored if output is stdout. The input file is always kept if the
+operation fails.
 .TP
 .B \-k --keep
 Keep (don't delete) the input files. Set by default, provided only

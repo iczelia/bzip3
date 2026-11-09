@@ -1,5 +1,6 @@
 AC_PREREQ([2.69])
 AC_INIT([bzip3], [m4_esyscmd(build-aux/git-version-gen .tarball-version)], [https://github.com/iczelia/bzip3])
+AC_CONFIG_SRCDIR([src/libbz3.c])
 AC_CONFIG_AUX_DIR([build-aux])
 AM_INIT_AUTOMAKE([foreign subdir-objects tar-ustar dist-bzip2 dist-xz dist-zip color-tests])
 AM_SILENT_RULES([yes])
@@ -16,8 +17,6 @@ LT_INIT
 PKG_PROG_PKG_CONFIG
 PKG_INSTALLDIR
 
-AC_C_RESTRICT
-
 AC_ARG_WITH([pthread],
 			  AS_HELP_STRING([--without-pthread], [Disable use of pthread library]))
 AM_CONDITIONAL([WITH_PTHREAD], [test x"$with_pthread" != xno])
@@ -29,7 +28,6 @@ AM_COND_IF([WITH_PTHREAD], [
 
 AC_ARG_ENABLE([arch-native],
 			AS_HELP_STRING([--disable-arch-native], [Disable CPU-specific optimizations]))
-AM_CONDITIONAL([ENABLE_ARCH_NATIVE], [test x"$enable_arch_native" != xno])
 
 AC_ARG_ENABLE([static-exe],
 			AS_HELP_STRING([--enable-static-exe], [Enable static builds of the executable.]))
@@ -44,11 +42,19 @@ AM_COND_IF([PASSED_CFLAGS], [
 	AX_CHECK_COMPILE_FLAG([-fPIC], [CFLAGS="$CFLAGS -fPIC"], [])
 	AC_MSG_NOTICE([using '$CFLAGS' plus compiler feature detection])
 
-	AM_COND_IF([ENABLE_ARCH_NATIVE], [
-				AX_CHECK_COMPILE_FLAG([-march=native], [CFLAGS="$CFLAGS -march=native"],
-									[AC_MSG_ERROR([Compiler does not support native optimizations, use --disable-arch-native])])
-				AX_CHECK_COMPILE_FLAG([-mtune=native], [CFLAGS="$CFLAGS -mtune=native"],
-									[AC_MSG_ERROR([Compiler does not support native optimizations, use --disable-arch-native])])
+	dnl CPU-specific optimizations are used wherever the compiler supports them. Not being able to use them
+	dnl is an error only if they were explicitly asked for.
+	AS_IF([test x"$enable_arch_native" != xno], [
+		AX_CHECK_COMPILE_FLAG([-march=native], [
+			CFLAGS="$CFLAGS -march=native"
+			AX_CHECK_COMPILE_FLAG([-mtune=native], [CFLAGS="$CFLAGS -mtune=native"], [])
+		], [
+			AX_CHECK_COMPILE_FLAG([-mcpu=native], [CFLAGS="$CFLAGS -mcpu=native"], [
+				AS_IF([test x"$enable_arch_native" = xyes],
+					[AC_MSG_ERROR([Compiler does not support native optimizations, use --disable-arch-native])],
+					[AC_MSG_NOTICE([compiler does not support native optimizations, building without them])])
+			])
+		])
 	])
 
 	AM_COND_IF([ENABLE_STATIC], [

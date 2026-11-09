@@ -1,1 +1,2 @@
 build-aux/* linguist-vendored
+3rdparty/** linguist-vendored

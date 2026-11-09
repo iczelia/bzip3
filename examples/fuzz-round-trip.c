@@ -19,7 +19,7 @@
  * 
  * 3. Build binary (for fuzzing)
  * 
- * afl-clang-fast fuzz-round-trip.c -I../include -o fuzz -g3 "-DVERSION=\"0.0.0\"" -O3 -march=native
+ * afl-clang-fast fuzz-round-trip.c -I../include -I../3rdparty/libsais -o fuzz -g3 "-DVERSION=\"0.0.0\"" -O3 -march=native
  * 
  * 4. Run the fuzzer
  * 
@@ -37,7 +37,7 @@
  * 6. For ASAN testing:
  *
  * export AFL_USE_ASAN=1
- * afl-clang-fast fuzz-round-trip.c -I../include -o fuzz -g3 "-DVERSION=\"0.0.0\"" -O3 -march=native
+ * afl-clang-fast fuzz-round-trip.c -I../include -I../3rdparty/libsais -o fuzz -g3 "-DVERSION=\"0.0.0\"" -O3 -march=native
  */
 
 #include "../include/libbz3.h"

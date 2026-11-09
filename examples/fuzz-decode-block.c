@@ -15,7 +15,7 @@
  * 
  * 2. Build binary (to compress test data).
  * 
- * afl-clang fuzz-decode-block.c -I../include -o fuzz -g3 "-DVERSION=\"0.0.0\"" -O3 -march=native
+ * afl-clang fuzz-decode-block.c -I../include -I../3rdparty/libsais -o fuzz -g3 "-DVERSION=\"0.0.0\"" -O3 -march=native
  * 
  * 3. Make a fuzzer input file.
  * 
@@ -31,7 +31,7 @@
  * 
  * 4. Build binary (for fuzzing).
  * 
- * afl-clang-fast fuzz-decode-block.c -I../include -o fuzz -g3 "-DVERSION=\"0.0.0\"" -O3 -march=native
+ * afl-clang-fast fuzz-decode-block.c -I../include -I../3rdparty/libsais -o fuzz -g3 "-DVERSION=\"0.0.0\"" -O3 -march=native
  * 
  * 5. Run the fuzzer.
  * 
@@ -52,7 +52,7 @@
  * 
  * If you find a crash, consider also doing the following:
  * 
- *      clang fuzz-decode-block.c -g3 -O3 -march=native -o fuzz_asan -I../include "-DVERSION=\"0.0.0\"" -fsanitize=undefined -fsanitize=address
+ *      clang fuzz-decode-block.c -g3 -O3 -march=native -o fuzz_asan -I../include -I../3rdparty/libsais "-DVERSION=\"0.0.0\"" -fsanitize=undefined -fsanitize=address
  *
  * And run fuzz_asan on the crashing test case (you can find it in one of the `afl_out/crashes/` folders).
  * Attach the test case /and/ the output of fuzz_asan to the bug report.
@@ -62,7 +62,7 @@
  * addres sanitizer; then run AFL.
  * 
  * export AFL_USE_ASAN=1
- * afl-clang-fast fuzz-decode-block.c -I../include -o fuzz -g3 "-DVERSION=\"0.0.0\"" -O3 -march=native
+ * afl-clang-fast fuzz-decode-block.c -I../include -I../3rdparty/libsais -o fuzz -g3 "-DVERSION=\"0.0.0\"" -O3 -march=native
  */
 
 /*

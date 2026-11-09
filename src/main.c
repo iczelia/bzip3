@@ -1,7 +1,7 @@
 
 /*
  * BZip3 - A spiritual successor to BZip2.
- * Copyright (C) 2022-2024 Kamila Szewczyk
+ * Copyright (C) 2022-2026 Kamila Szewczyk
  *
  * This program is free software: you can redistribute it and/or modify it
  * under the terms of the GNU Lesser General Public License as published by the Free
@@ -19,8 +19,10 @@
 
 #include <ctype.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <inttypes.h>
 #include <limits.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -28,8 +30,11 @@
 #include <unistd.h>
 
 #if defined __MSVCRT__
-    #include <fcntl.h>
     #include <io.h>
+#endif
+
+#ifndef O_BINARY
+    #define O_BINARY 0
 #endif
 
 #include "common.h"
@@ -41,14 +46,41 @@
 #define MODE_TEST 2
 #define MODE_RECOVER 3
 
-static void version() {
+#define MIN_BLOCK_SIZE KiB(65)
+#define MAX_BLOCK_SIZE MiB(511)
+#define MAX_WORKERS 64
+
+/* The regular file currently being written, if any. It is removed when the operation fails so that
+   no truncated output is left behind. */
+static const char * partial_output = NULL;
+
+static void remove_partial_output(void) {
+    if (partial_output) {
+        remove(partial_output);
+        partial_output = NULL;
+    }
+}
+
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((format(printf, 1, 2), noreturn))
+#endif
+static void fatal(const char * fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    vfprintf(stderr, fmt, ap);
+    va_end(ap);
+    remove_partial_output();
+    exit(1);
+}
+
+static void version(void) {
     fprintf(stdout, "bzip3 " VERSION
                     "\n"
-                    "Copyright (C) by Kamila Szewczyk, 2022-2025.\n"
+                    "Copyright (C) by Kamila Szewczyk, 2022-2026.\n"
                     "License: GNU Lesser GPL version 3 <https://www.gnu.org/licenses/lgpl-3.0.en.html>\n");
 }
 
-static void help() {
+static void help(void) {
     fprintf(stdout,
             "bzip3 - better and stronger spiritual successor to bzip2.\n"
             "Usage: bzip3 [-e/-z/-d/-t/-c/-h/-V] [-b block_size] [-j jobs] files...\n"
@@ -74,413 +106,232 @@ static void help() {
             "Report bugs to: https://github.com/iczelia/bzip3\n");
 }
 
-static void xwrite(const void * data, size_t size, size_t len, FILE * des) {
-    if (len == 0 || size == 0) return;
-    if (fwrite(data, size, len, des) != len) {
-        fprintf(stderr, "Write error: %s\n", strerror(errno));
-        exit(1);
+static void * xmalloc_zeroed(size_t count, size_t size) {
+    void * ptr = calloc(count ? count : 1, size ? size : 1);
+    if (!ptr) fatal("Failed to allocate memory.\n");
+    return ptr;
+}
+
+static void xwrite(const void * data, size_t size, FILE * des) {
+    if (size == 0) return;
+    if (fwrite(data, 1, size, des) != size) fatal("Write error: %s\n", strerror(errno));
+}
+
+/* Read up to `size' bytes; fewer are returned only at the end of the file. */
+static size_t xread(void * data, size_t size, FILE * des) {
+    size_t count = fread(data, 1, size, des);
+    if (ferror(des)) fatal("Read error: %s\n", strerror(errno));
+    return count;
+}
+
+/* Read exactly `size' bytes. */
+static void xread_exact(void * data, size_t size, FILE * des) {
+    if (xread(data, size, des) != size) fatal("Error: Corrupt file\n");
+}
+
+static void close_out_file(FILE * des) {
+    if (!des) return;
+
+    if (fflush(des)) fatal("Error: Failed on fflush: %s\n", strerror(errno));
+
+#ifdef __linux__
+    while (fsync(fileno(des)) == -1) {
+        if (errno == EINVAL) break; /* Not a file that can be synchronised, e.g. a pipe. */
+        if (errno == EINTR) continue;
+        fatal("Error: Failed on fsync: %s\n", strerror(errno));
+    }
+#endif
+
+    if (des != stdout && fclose(des)) fatal("Error: Failed on fclose: %s\n", strerror(errno));
+
+    partial_output = NULL;
+}
+
+/* The buffers and the coder states of all the workers. */
+struct workers {
+    int count;
+    struct bz3_state ** states;
+    u8 ** buffers;
+    size_t * buffer_sizes;
+    s32 *sizes, *orig_sizes;
+};
+
+static void workers_init(struct workers * w, int count, s32 block_size) {
+    w->count = count;
+    w->states = xmalloc_zeroed((size_t)count, sizeof(*w->states));
+    w->buffers = xmalloc_zeroed((size_t)count, sizeof(*w->buffers));
+    w->buffer_sizes = xmalloc_zeroed((size_t)count, sizeof(*w->buffer_sizes));
+    w->sizes = xmalloc_zeroed((size_t)count, sizeof(*w->sizes));
+    w->orig_sizes = xmalloc_zeroed((size_t)count, sizeof(*w->orig_sizes));
+    for (int i = 0; i < count; i++) {
+        w->states[i] = bz3_new(block_size);
+        if (!w->states[i]) fatal("Failed to create a block encoder state.\n");
+        w->buffer_sizes[i] = bz3_bound((size_t)block_size);
+        /* Zeroed, so that the recovery mode never writes out uninitialised memory. */
+        w->buffers[i] = xmalloc_zeroed(w->buffer_sizes[i], 1);
     }
 }
 
-/* Read any amount of items (from 0 to len) as long as there is no error */
-static size_t xread(void * data, size_t size, size_t len, FILE * des) {
-    size_t written = fread(data, size, len, des);
-    if (ferror(des)) {
-        fprintf(stderr, "Read error: %s\n", strerror(errno));
-        exit(1);
+static void workers_free(struct workers * w) {
+    for (int i = 0; i < w->count; i++) {
+        bz3_free(w->states[i]);
+        free(w->buffers[i]);
     }
-    return written;
+    free(w->states);
+    free(w->buffers);
+    free(w->buffer_sizes);
+    free(w->sizes);
+    free(w->orig_sizes);
 }
 
-/* Either read 0 (due to eof) items or exactly len items */
-static size_t xread_eofcheck(void * data, size_t size, size_t len, FILE * des) {
-    size_t written = xread(data, size, len, des);
-    /* feof will be true */
-    if (!written) return 0;
-    if (feof(des)) {
-        fprintf(stderr, "Error: Corrupt file\n");
-        exit(1);
+/* Encode or decode the first `n' blocks held by the workers. */
+static void workers_run(struct workers * w, int n, int encode) {
+#ifdef PTHREAD
+    if (n > 1) {
+        if (encode)
+            bz3_encode_blocks(w->states, w->buffers, w->sizes, n);
+        else
+            bz3_decode_blocks(w->states, w->buffers, w->buffer_sizes, w->sizes, w->orig_sizes, n);
+        return;
     }
-    return written;
-}
-
-/* Always read len items */
-static void xread_noeof(void * data, size_t size, size_t len, FILE * des) {
-    if (!xread_eofcheck(data, size, len, des)) {
-        fprintf(stderr, "Error: Corrupt file\n");
-        exit(1);
+#endif
+    for (int i = 0; i < n; i++) {
+        if (encode)
+            w->sizes[i] = bz3_encode_block(w->states[i], w->buffers[i], w->sizes[i]);
+        else
+            bz3_decode_block(w->states[i], w->buffers[i], w->buffer_sizes[i], w->sizes[i], w->orig_sizes[i]);
     }
 }
 
 /* Validate the compressed and original sizes stored in a block header. */
 static int valid_block_header(s32 new_size, s32 old_size, s32 block_size) {
-    return new_size >= 0 && (size_t)new_size <= bz3_bound(block_size) && old_size >= 0 && old_size <= block_size;
+    return new_size >= 0 && (size_t)new_size <= bz3_bound((size_t)block_size) && old_size >= 0 &&
+           old_size <= block_size;
 }
 
-static void close_out_file(FILE * des) {
-    if (des) {
-        int outfd = fileno(des);
-
-        if (fflush(des)) {
-            fprintf(stderr, "Error: Failed on fflush: %s\n", strerror(errno));
-            exit(1);
-        }
-
-#ifdef __linux__
-        while (1) {
-            int status = fsync(outfd);
-            if (status == -1) {
-                if (errno == EINVAL) break;
-                if (errno == EINTR) continue;
-                fprintf(stderr, "Error: Failed on fsync: %s\n", strerror(errno));
-                exit(1);
-            }
-            break;
-        }
-#endif
-
-        if (des != stdout && fclose(des)) {
-            fprintf(stderr, "Error: Failed on fclose: %s\n", strerror(errno));
-            exit(1);
-        }
-    }
-}
-
-static void remove_in_file(char * file_name, FILE * output_des) {
-    if (file_name == NULL) {
-        return;
-    }
-    if (output_des == stdout) {
-        return;
-    }
-    if (remove(file_name)) {
-        fprintf(stderr, "Error: failed to remove input file `%s': %s\n", file_name, strerror(errno));
-        exit(1);
-    }
-}
-
-static int process(FILE * input_des, FILE * output_des, int mode, int block_size, int workers, int verbose,
-                   char * file_name) {
+static int process(FILE * input_des, FILE * output_des, int mode, s32 block_size, int workers, int verbose,
+                   const char * file_name) {
     uint64_t bytes_read = 0, bytes_written = 0;
+    u8 header[9];
 
-    if ((mode == MODE_ENCODE && isatty(fileno(output_des))) ||
-        ((mode == MODE_DECODE || mode == MODE_TEST || mode == MODE_RECOVER) && isatty(fileno(input_des)))) {
+    if ((mode == MODE_ENCODE && isatty(fileno(output_des))) || (mode != MODE_ENCODE && isatty(fileno(input_des)))) {
         fprintf(stderr, "Refusing to read/write binary data from/to the terminal.\n");
         return 1;
     }
 
-    // Reset errno after the isatty() call.
+    /* Reset errno after the isatty() call. */
     errno = 0;
 
-    u8 byteswap_buf[4];
-
-    switch (mode) {
-        case MODE_ENCODE:
-            xwrite("BZ3v1", 5, 1, output_des);
-
-            write_neutral_s32(byteswap_buf, block_size);
-            xwrite(byteswap_buf, 4, 1, output_des);
-
-            bytes_written += 9;
-            break;
-        case MODE_RECOVER:
-        case MODE_DECODE:
-        case MODE_TEST: {
-            char signature[5];
-
-            if (xread(signature, 5, 1, input_des) != 1 || strncmp(signature, "BZ3v1", 5) != 0) {
-                fprintf(stderr, "Invalid signature.\n");
-                return 1;
-            }
-
-            xread_noeof(byteswap_buf, 4, 1, input_des);
-
-            block_size = read_neutral_s32(byteswap_buf);
-
-            if (block_size < KiB(65) || block_size > MiB(511)) {
-                fprintf(stderr,
-                        "The input file is corrupted. Reason: Invalid block "
-                        "size in the header.\n");
-                if (mode == MODE_RECOVER) {
-                    fprintf(stderr, "Recovery mode: Proceeding.\n");
-                    block_size = MiB(511);
-                } else {
-                    return 1;
-                }
-            }
-
-            bytes_read += 9;
-            break;
-        }
-    }
-
-#ifdef PTHREAD
-    if (workers > 64 || workers < 0) {
-        fprintf(stderr, "Number of workers must be between 0 and 64.\n");
-        return 1;
-    }
-
-    if (workers <= 1) {
-#endif
-        struct bz3_state * state = bz3_new(block_size);
-
-        if (state == NULL) {
-            fprintf(stderr, "Failed to create a block encoder state.\n");
-            return 1;
-        }
-
-        size_t buffer_size = bz3_bound(block_size);
-        u8 * buffer = malloc(buffer_size);
-
-        if (!buffer) {
-            fprintf(stderr, "Failed to allocate memory.\n");
-            return 1;
-        }
-
-        if (mode == MODE_ENCODE) {
-            s32 read_count;
-            while (!feof(input_des)) {
-                read_count = xread(buffer, 1, block_size, input_des);
-                bytes_read += read_count;
-
-                if (read_count == 0) break;
-
-                s32 new_size = bz3_encode_block(state, buffer, read_count);
-                if (new_size == -1) {
-                    fprintf(stderr, "Failed to encode a block: %s\n", bz3_strerror(state));
-                    return 1;
-                }
-
-                write_neutral_s32(byteswap_buf, new_size);
-                xwrite(byteswap_buf, 4, 1, output_des);
-                write_neutral_s32(byteswap_buf, read_count);
-                xwrite(byteswap_buf, 4, 1, output_des);
-                xwrite(buffer, new_size, 1, output_des);
-                bytes_written += 8 + new_size;
-            }
-            fflush(output_des);
-        } else if (mode == MODE_DECODE) {
-            s32 new_size, old_size;
-            while (!feof(input_des)) {
-                if (!xread_eofcheck(&byteswap_buf, 1, 4, input_des)) continue;
-
-                new_size = read_neutral_s32(byteswap_buf);
-                xread_noeof(&byteswap_buf, 1, 4, input_des);
-                old_size = read_neutral_s32(byteswap_buf);
-                if (!valid_block_header(new_size, old_size, block_size)) {
-                    fprintf(stderr, "Failed to decode a block: Inconsistent headers.\n");
-                    return 1;
-                }
-                xread_noeof(buffer, 1, new_size, input_des);
-                bytes_read += 8 + new_size;
-                if (bz3_decode_block(state, buffer, buffer_size, new_size, old_size) == -1) {
-                    fprintf(stderr, "Failed to decode a block: %s\n", bz3_strerror(state));
-                    return 1;
-                }
-                xwrite(buffer, old_size, 1, output_des);
-                bytes_written += old_size;
-            }
-            fflush(output_des);
-        } else if (mode == MODE_RECOVER) {
-            s32 new_size, old_size;
-            while (!feof(input_des)) {
-                if (!xread_eofcheck(&byteswap_buf, 1, 4, input_des)) continue;
-
-                new_size = read_neutral_s32(byteswap_buf);
-                xread_noeof(&byteswap_buf, 1, 4, input_des);
-                old_size = read_neutral_s32(byteswap_buf);
-                if (!valid_block_header(new_size, old_size, block_size)) {
-                    fprintf(stderr, "Failed to decode a block: Inconsistent headers.\n");
-                    return 1;
-                }
-                xread_noeof(buffer, 1, new_size, input_des);
-                bytes_read += 8 + new_size;
-                if (bz3_decode_block(state, buffer, buffer_size, new_size, old_size) == -1) {
-                    fprintf(stderr, "Writing invalid block: %s\n", bz3_strerror(state));
-                }
-                xwrite(buffer, old_size, 1, output_des);
-                bytes_written += old_size;
-            }
-            fflush(output_des);
-        } else if (mode == MODE_TEST) {
-            s32 new_size, old_size;
-            while (!feof(input_des)) {
-                if (!xread_eofcheck(&byteswap_buf, 1, 4, input_des)) continue;
-                new_size = read_neutral_s32(byteswap_buf);
-                xread_noeof(&byteswap_buf, 1, 4, input_des);
-                old_size = read_neutral_s32(byteswap_buf);
-                if (!valid_block_header(new_size, old_size, block_size)) {
-                    fprintf(stderr, "Failed to decode a block: Inconsistent headers.\n");
-                    return 1;
-                }
-                xread_noeof(buffer, 1, new_size, input_des);
-                bytes_read += 8 + new_size;
-                bytes_written += old_size;
-                if (bz3_decode_block(state, buffer, buffer_size, new_size, old_size) == -1) {
-                    fprintf(stderr, "Failed to decode a block: %s\n", bz3_strerror(state));
-                    return 1;
-                }
-            }
-        }
-
-        if (bz3_last_error(state) != BZ3_OK && mode != MODE_RECOVER) {
-            fprintf(stderr, "Failed to read data: %s\n", bz3_strerror(state));
-            return 1;
-        }
-
-        free(buffer);
-
-        bz3_free(state);
-#ifdef PTHREAD
+    if (mode == MODE_ENCODE) {
+        memcpy(header, "BZ3v1", 5);
+        write_neutral_s32(header + 5, block_size);
+        xwrite(header, 9, output_des);
+        bytes_written += 9;
     } else {
-        struct bz3_state * states[workers];
-        u8 * buffers[workers];
-        s32 sizes[workers];
-        size_t buffer_sizes[workers];
-        s32 old_sizes[workers];
-        for (s32 i = 0; i < workers; i++) {
-            states[i] = bz3_new(block_size);
-            if (states[i] == NULL) {
-                fprintf(stderr, "Failed to create a block encoder state.\n");
-                return 1;
-            }
-            size_t buffer_size = bz3_bound(block_size);
-            buffer_sizes[i] = buffer_size;
-            buffers[i] = malloc(buffer_size);
-            if (!buffers[i]) {
-                fprintf(stderr, "Failed to allocate memory.\n");
-                return 1;
-            }
+        if (xread(header, 5, input_des) != 5 || memcmp(header, "BZ3v1", 5) != 0) {
+            fprintf(stderr, "Invalid signature.\n");
+            return 1;
         }
 
-        if (mode == MODE_ENCODE) {
-            while (!feof(input_des)) {
-                s32 i = 0;
-                for (; i < workers; i++) {
-                    size_t read_count = xread(buffers[i], 1, block_size, input_des);
-                    bytes_read += read_count;
-                    sizes[i] = old_sizes[i] = read_count;
-                    if (read_count < block_size) {
-                        i++;
-                        break;
-                    }
-                }
-                bz3_encode_blocks(states, buffers, sizes, i);
-                for (s32 j = 0; j < i; j++) {
-                    if (bz3_last_error(states[j]) != BZ3_OK) {
-                        fprintf(stderr, "Failed to encode data: %s\n", bz3_strerror(states[j]));
-                        return 1;
-                    }
-                }
-                for (s32 j = 0; j < i; j++) {
-                    write_neutral_s32(byteswap_buf, sizes[j]);
-                    xwrite(byteswap_buf, 4, 1, output_des);
-                    write_neutral_s32(byteswap_buf, old_sizes[j]);
-                    xwrite(byteswap_buf, 4, 1, output_des);
-                    xwrite(buffers[j], sizes[j], 1, output_des);
-                    bytes_written += 8 + sizes[j];
-                }
-            }
-            fflush(output_des);
-        } else if (mode == MODE_DECODE) {
-            while (!feof(input_des)) {
-                s32 i = 0;
-                for (; i < workers; i++) {
-                    if (!xread_eofcheck(&byteswap_buf, 1, 4, input_des)) break;
-                    sizes[i] = read_neutral_s32(byteswap_buf);
-                    xread_noeof(&byteswap_buf, 1, 4, input_des);
-                    old_sizes[i] = read_neutral_s32(byteswap_buf);
-                    if (!valid_block_header(sizes[i], old_sizes[i], block_size)) {
-                        fprintf(stderr, "Failed to decode a block: Inconsistent headers.\n");
-                        return 1;
-                    }
-                    xread_noeof(buffers[i], 1, sizes[i], input_des);
-                    bytes_read += 8 + sizes[i];
-                }
-                bz3_decode_blocks(states, buffers, buffer_sizes, sizes, old_sizes, i);
-                for (s32 j = 0; j < i; j++) {
-                    if (bz3_last_error(states[j]) != BZ3_OK) {
-                        fprintf(stderr, "Failed to decode data: %s\n", bz3_strerror(states[j]));
-                        return 1;
-                    }
-                }
-                for (s32 j = 0; j < i; j++) {
-                    xwrite(buffers[j], old_sizes[j], 1, output_des);
-                    bytes_written += old_sizes[j];
-                }
-            }
-            fflush(output_des);
-        } else if (mode == MODE_RECOVER) {
-            while (!feof(input_des)) {
-                s32 i = 0;
-                for (; i < workers; i++) {
-                    if (!xread_eofcheck(&byteswap_buf, 1, 4, input_des)) break;
-                    sizes[i] = read_neutral_s32(byteswap_buf);
-                    xread_noeof(&byteswap_buf, 1, 4, input_des);
-                    old_sizes[i] = read_neutral_s32(byteswap_buf);
-                    if (!valid_block_header(sizes[i], old_sizes[i], block_size)) {
-                        fprintf(stderr, "Failed to decode a block: Inconsistent headers.\n");
-                        return 1;
-                    }
-                    xread_noeof(buffers[i], 1, sizes[i], input_des);
-                    bytes_read += 8 + sizes[i];
-                }
-                bz3_decode_blocks(states, buffers, buffer_sizes, sizes, old_sizes, i);
-                for (s32 j = 0; j < i; j++) {
-                    if (bz3_last_error(states[j]) != BZ3_OK) {
-                        fprintf(stderr, "Writing invalid block: %s\n", bz3_strerror(states[j]));
-                    }
-                }
-                for (s32 j = 0; j < i; j++) {
-                    xwrite(buffers[j], old_sizes[j], 1, output_des);
-                    bytes_written += old_sizes[j];
-                }
-            }
-            fflush(output_des);
-        } else if (mode == MODE_TEST) {
-            while (!feof(input_des)) {
-                s32 i = 0;
-                for (; i < workers; i++) {
-                    if (!xread_eofcheck(&byteswap_buf, 1, 4, input_des)) break;
-                    sizes[i] = read_neutral_s32(byteswap_buf);
-                    xread_noeof(&byteswap_buf, 1, 4, input_des);
-                    old_sizes[i] = read_neutral_s32(byteswap_buf);
-                    if (!valid_block_header(sizes[i], old_sizes[i], block_size)) {
-                        fprintf(stderr, "Failed to decode a block: Inconsistent headers.\n");
-                        return 1;
-                    }
-                    xread_noeof(buffers[i], 1, sizes[i], input_des);
-                    bytes_read += 8 + sizes[i];
-                    bytes_written += old_sizes[i];
-                }
-                bz3_decode_blocks(states, buffers, buffer_sizes, sizes, old_sizes, i);
-                for (s32 j = 0; j < i; j++) {
-                    if (bz3_last_error(states[j]) != BZ3_OK) {
-                        fprintf(stderr, "Failed to decode data: %s\n", bz3_strerror(states[j]));
-                        return 1;
-                    }
-                }
-            }
+        xread_exact(header + 5, 4, input_des);
+        block_size = read_neutral_s32(header + 5);
+
+        if (block_size < MIN_BLOCK_SIZE || block_size > MAX_BLOCK_SIZE) {
+            fprintf(stderr, "The input file is corrupted. Reason: Invalid block size in the header.\n");
+            if (mode != MODE_RECOVER) return 1;
+            fprintf(stderr, "Recovery mode: Proceeding.\n");
+            block_size = MAX_BLOCK_SIZE;
         }
 
-        for (s32 i = 0; i < workers; i++) {
-            free(buffers[i]);
-            bz3_free(states[i]);
+        bytes_read += 9;
+    }
+
+    if (workers < 1) workers = 1;
+#ifndef PTHREAD
+    workers = 1;
+#endif
+
+    struct workers w;
+    workers_init(&w, workers, block_size);
+
+    int status = 0;
+    for (int eof = 0; !eof && !status;) {
+        /* Fill as many buffers as there is data for. */
+        int n = 0;
+        for (; n < workers; n++) {
+            if (mode == MODE_ENCODE) {
+                size_t count = xread(w.buffers[n], (size_t)block_size, input_des);
+                eof = count < (size_t)block_size;
+                if (count == 0) break;
+                w.sizes[n] = w.orig_sizes[n] = (s32)count;
+                bytes_read += count;
+                if (eof) {
+                    n++;
+                    break;
+                }
+            } else {
+                size_t count = xread(header, 8, input_des);
+                if (count == 0) {
+                    eof = 1;
+                    break;
+                }
+                if (count != 8) fatal("Error: Corrupt file\n");
+                w.sizes[n] = read_neutral_s32(header);
+                w.orig_sizes[n] = read_neutral_s32(header + 4);
+                if (!valid_block_header(w.sizes[n], w.orig_sizes[n], block_size)) {
+                    fprintf(stderr, "Failed to decode a block: Inconsistent headers.\n");
+                    status = 1;
+                    break;
+                }
+                xread_exact(w.buffers[n], (size_t)w.sizes[n], input_des);
+                bytes_read += 8 + (uint64_t)w.sizes[n];
+            }
+        }
+        if (status) break;
+
+        workers_run(&w, n, mode == MODE_ENCODE);
+
+        for (int i = 0; i < n && !status; i++) {
+            if (bz3_last_error(w.states[i]) != BZ3_OK) {
+                if (mode == MODE_ENCODE) {
+                    fprintf(stderr, "Failed to encode a block: %s\n", bz3_strerror(w.states[i]));
+                    status = 1;
+                } else if (mode == MODE_RECOVER) {
+                    fprintf(stderr, "Writing invalid block: %s\n", bz3_strerror(w.states[i]));
+                } else {
+                    fprintf(stderr, "Failed to decode a block: %s\n", bz3_strerror(w.states[i]));
+                    status = 1;
+                }
+                if (status) break;
+            }
+
+            if (mode == MODE_ENCODE) {
+                write_neutral_s32(header, w.sizes[i]);
+                write_neutral_s32(header + 4, w.orig_sizes[i]);
+                xwrite(header, 8, output_des);
+                xwrite(w.buffers[i], (size_t)w.sizes[i], output_des);
+                bytes_written += 8 + (uint64_t)w.sizes[i];
+            } else {
+                if (mode != MODE_TEST) xwrite(w.buffers[i], (size_t)w.orig_sizes[i], output_des);
+                bytes_written += (uint64_t)w.orig_sizes[i];
+            }
         }
     }
-#endif
+
+    workers_free(&w);
+
+    if (status) return status;
+
+    if (output_des && fflush(output_des)) fatal("Write error: %s\n", strerror(errno));
 
     if (verbose) {
+        /* The size of the compressed data relative to the size of the original. */
+        const double packed = (double)(mode == MODE_ENCODE ? bytes_written : bytes_read);
+        const double unpacked = (double)(mode == MODE_ENCODE ? bytes_read : bytes_written);
         if (file_name) fprintf(stderr, " %s:", file_name);
-        if (mode == MODE_ENCODE)
-            fprintf(stderr, "\t%" PRIu64 " -> %" PRIu64 " bytes, %.2f%%, %.2f bpb\n", bytes_read, bytes_written,
-                    (double)bytes_written * 100.0 / bytes_read, (double)bytes_written * 8.0 / bytes_read);
-        else if (mode == MODE_DECODE)
-            fprintf(stderr, "\t%" PRIu64 " -> %" PRIu64 " bytes, %.2f%%, %.2f bpb\n", bytes_read, bytes_written,
-                    (double)bytes_read * 100.0 / bytes_written, (double)bytes_read * 8.0 / bytes_written);
-        else
-            fprintf(stderr, "\tOK, %" PRIu64 " -> %" PRIu64 " bytes, %.2f%%, %.2f bpb\n", bytes_read, bytes_written,
-                    (double)bytes_read * 100.0 / bytes_written, (double)bytes_read * 8.0 / bytes_written);
+        fprintf(stderr, "\t%s%" PRIu64 " -> %" PRIu64 " bytes, %.2f%%, %.2f bpb\n",
+                mode == MODE_ENCODE || mode == MODE_DECODE ? "" : "OK, ", bytes_read, bytes_written,
+                packed * 100.0 / unpacked, packed * 8.0 / unpacked);
     }
 
     return 0;
@@ -488,145 +339,176 @@ static int process(FILE * input_des, FILE * output_des, int mode, int block_size
 
 static int is_dir(const char * path) {
     struct stat sb;
-    if (stat(path, &sb) == 0 && S_ISDIR(sb.st_mode)) return 1;
-    return 0;
+    return stat(path, &sb) == 0 && S_ISDIR(sb.st_mode);
 }
 
-static int is_numeric(const char * str) {
-    for (; *str; str++)
-        if (!isdigit(*str)) return 0;
+/* Parse a decimal number between `min' and `max'. Returns 0 on failure. */
+static int parse_number(const char * str, long min, long max, long * result) {
+    if (!*str) return 0;
+    for (const char * p = str; *p; p++)
+        if (!isdigit((unsigned char)*p)) return 0;
+    errno = 0;
+    long value = strtol(str, NULL, 10);
+    if (errno || value < min || value > max) return 0;
+    *result = value;
     return 1;
 }
 
-static FILE * open_output(char * output, int force) {
-    FILE * output_des = NULL;
+static FILE * open_input(const char * input) {
+    if (input == NULL) return stdin;
 
-    if (output != NULL) {
-        if (is_dir(output)) {
-            fprintf(stderr, "Error: output file `%s' is a directory.\n", output);
-            exit(1);
-        }
+    if (is_dir(input)) fatal("Error: input `%s' is a directory.\n", input);
 
-        if (access(output, F_OK) == 0) {
-            if (!force) {
-                fprintf(stderr, "Error: output file `%s' already exists. Use -f to force overwrite.\n", output);
-                exit(1);
-            }
-        }
+    FILE * input_des = fopen(input, "rb");
+    if (input_des == NULL) fatal("Error: failed to open input file `%s': %s\n", input, strerror(errno));
+    return input_des;
+}
 
-        output_des = fopen(output, "wb");
-        if (output_des == NULL) {
-            fprintf(stderr, "Error: failed to open output file `%s': %s\n", output, strerror(errno));
-            exit(1);
-        }
-    } else {
-        output_des = stdout;
-    }
+/* Open the output file. Unless `force' is set, the file is created exclusively, so that an existing file
+   (or a symbolic link planted in its place) is never written to. The new file gets the access permissions
+   of the input, if known. */
+static FILE * open_output(const char * output, int force, FILE * input_des) {
+    if (output == NULL) return stdout;
+
+    if (is_dir(output)) fatal("Error: output file `%s' is a directory.\n", output);
+
+    struct stat in_stat, out_stat;
+    int have_in_stat = input_des != stdin && fstat(fileno(input_des), &in_stat) == 0;
+    int mode = have_in_stat && S_ISREG(in_stat.st_mode) ? (int)(in_stat.st_mode & 0777) : 0666;
+
+    if (have_in_stat && in_stat.st_ino != 0 && stat(output, &out_stat) == 0 && in_stat.st_dev == out_stat.st_dev &&
+        in_stat.st_ino == out_stat.st_ino)
+        fatal("Error: input and output are the same file `%s'.\n", output);
+
+    int fd = open(output, O_WRONLY | O_CREAT | O_BINARY | (force ? O_TRUNC : O_EXCL), mode);
+    if (fd == -1 && errno == EEXIST && !force)
+        fatal("Error: output file `%s' already exists. Use -f to force overwrite.\n", output);
+
+    FILE * output_des = fd == -1 ? NULL : fdopen(fd, "wb");
+    if (output_des == NULL) fatal("Error: failed to open output file `%s': %s\n", output, strerror(errno));
+
+    /* Only regular files are cleaned up after a failure; never devices and the like. */
+    if (fstat(fd, &out_stat) == 0 && S_ISREG(out_stat.st_mode)) partial_output = output;
 
     return output_des;
 }
 
-static FILE * open_input(char * input) {
-    FILE * input_des = NULL;
-
-    if (input != NULL) {
-        if (is_dir(input)) {
-            fprintf(stderr, "Error: input `%s' is a directory.\n", input);
-            exit(1);
-        }
-
-        input_des = fopen(input, "rb");
-        if (input_des == NULL) {
-            fprintf(stderr, "Error: failed to open input file `%s': %s\n", input, strerror(errno));
-            exit(1);
-        }
+/* Derive the name of the output file from the name of the input. Returns NULL if a file to decompress
+   does not carry the .bz3 extension. */
+static char * output_name_for(const char * input, int mode) {
+    size_t len = strlen(input);
+    char * output = xmalloc_zeroed(len + 5, 1);
+    memcpy(output, input, len);
+    if (mode == MODE_ENCODE) {
+        memcpy(output + len, ".bz3", 5);
+    } else if (len > 4 && !strcmp(input + len - 4, ".bz3")) {
+        output[len - 4] = 0;
     } else {
-        input_des = stdin;
+        fprintf(stderr, "Warning: file %s has an unknown extension, skipping.\n", input);
+        free(output);
+        return NULL;
     }
-
-    return input_des;
+    return output;
 }
 
-int main(int argc, char * argv[]) {
+/* Process a single file. A NULL input or output stands for the standard streams, and so does "-". */
+static int process_file(const char * input, const char * output, int mode, s32 block_size, int workers, int verbose,
+                        int force, int remove_input_file) {
+    if (input && !strcmp(input, "-")) input = NULL;
+    if (output && !strcmp(output, "-")) output = NULL;
+
+    FILE * input_des = open_input(input);
+    FILE * output_des = mode != MODE_TEST ? open_output(output, force, input_des) : NULL;
+
+    int status = process(input_des, output_des, mode, block_size, workers, verbose, input);
+
+    if (input_des != stdin) fclose(input_des);
+
+    if (status) {
+        if (output_des && output_des != stdout) fclose(output_des);
+        remove_partial_output();
+        return status;
+    }
+
+    close_out_file(output_des);
+
+    /* The input is removed only once the output is known to be complete and written to a file. */
+    if (remove_input_file && input && output && mode != MODE_TEST && remove(input))
+        fatal("Error: failed to remove input file `%s': %s\n", input, strerror(errno));
+
+    return 0;
+}
+
+enum { RM_OPTION = CHAR_MAX + 1 };
+
+/* Carry out what the parsed command line asks for. Returns the exit status. */
+static int run(const yarg_result * res) {
     int mode = MODE_ENCODE;
+    int force = 0, force_stdstreams = 0, workers = 0, batch = 0, verbose = 0, remove_input_file = 0;
+    s32 block_size = MiB(16);
+    long number;
 
-    // input and output file names
-    char *input = NULL, *output = NULL;
-    char *f1 = NULL, *f2 = NULL;
-    int force = 0;
-
-    // command line arguments
-    int force_stdstreams = 0, workers = 0, batch = 0, verbose = 0, remove_input_file = 0;
-
-    // the block size
-    u32 block_size = MiB(16);
-
-    enum { RM_OPTION = CHAR_MAX + 1 };
-
-    yarg_options opt[] = {
-        {       'e', no_argument,       "encode" },
-        {       'z', no_argument,       "encode" }, /* alias */
-        {       'd', no_argument,       "decode" },
-        {       't', no_argument,       "test" },
-        {       'c', no_argument,       "stdout" },
-        {       'f', no_argument,       "force" },
-        {       'r', no_argument,       "recover" },
-        {       'h', no_argument,       "help" },
-        { RM_OPTION, no_argument,       "rm" },
-        {       'k', no_argument,       "keep" },
-        {       'V', no_argument,       "version" },
-        {       'v', no_argument,       "verbose" },
-        {       'b', required_argument, "block" },
-        {       'B', no_argument,       "batch" },
-#ifdef PTHREAD
-        {       'j', required_argument, "jobs" },
-#endif
-        {         0, no_argument,       NULL }
-    };
-    yarg_settings settings = {
-        .dash_dash = true,
-        .style = YARG_STYLE_UNIX,
-    };
-    yarg_result * res = yarg_parse(argc, argv, opt, settings);
-    if (!res) {
-        fprintf(stderr, "bzip3: out of memory.\n");
-        return 1;
-    }
-    if (res->error) {
-        fputs(res->error, stderr);
-        fputs("Try 'bzip3 --help' for more information.\n", stderr);
-        return 1;
-    }
-    // `res' is not freed later on as it has the approximate lifetime
-    // equal to the lifetime of the program overall.
     for (int i = 0; i < res->argc; i++) {
-        switch(res->args[i].opt) {
-            case 'e': case 'z': mode = MODE_ENCODE; break;
-            case 'd': mode = MODE_DECODE; break;
-            case 'r': mode = MODE_RECOVER; break;
-            case 't': mode = MODE_TEST; break;
-            case 'c': force_stdstreams = 1; break;
-            case 'f': force = 1; break;
-            case RM_OPTION: remove_input_file = 1; break;
-            case 'k': break;
-            case 'h': help(); return 0;
-            case 'V': version(); return 0;
-            case 'B': batch = 1; break;
-            case 'v': verbose = 1; break;
+        switch (res->args[i].opt) {
+            case 'e':
+            case 'z':
+                mode = MODE_ENCODE;
+                break;
+            case 'd':
+                mode = MODE_DECODE;
+                break;
+            case 'r':
+                mode = MODE_RECOVER;
+                break;
+            case 't':
+                mode = MODE_TEST;
+                break;
+            case 'c':
+                force_stdstreams = 1;
+                break;
+            case 'f':
+                force = 1;
+                break;
+            case RM_OPTION:
+                remove_input_file = 1;
+                break;
+            case 'k':
+                remove_input_file = 0;
+                break;
+            case 'h':
+                help();
+                return 0;
+            case 'V':
+                version();
+                return 0;
+            case 'B':
+                batch = 1;
+                break;
+            case 'v':
+                verbose = 1;
+                break;
             case 'b':
-                if (!is_numeric(res->args[i].arg)) {
+                if (!parse_number(res->args[i].arg, 0, LONG_MAX, &number)) {
                     fprintf(stderr, "bzip3: invalid block size: %s\n", res->args[i].arg);
                     return 1;
                 }
-                block_size = MiB(atoi(res->args[i].arg));
+                if (number < 1 || number > MAX_BLOCK_SIZE / MiB(1)) {
+                    fprintf(stderr, "Block size must be between 65 KiB and 511 MiB.\n");
+                    return 1;
+                }
+                block_size = MiB((s32)number);
                 break;
 #ifdef PTHREAD
             case 'j':
-                if (!is_numeric(res->args[i].arg)) {
+                if (!parse_number(res->args[i].arg, 0, LONG_MAX, &number)) {
                     fprintf(stderr, "bzip3: invalid amount of jobs: %s\n", res->args[i].arg);
                     return 1;
                 }
-                workers = atoi(res->args[i].arg);
+                if (number > MAX_WORKERS) {
+                    fprintf(stderr, "Number of workers must be between 0 and %d.\n", MAX_WORKERS);
+                    return 1;
+                }
+                workers = (int)number;
                 break;
 #endif
         }
@@ -637,183 +519,87 @@ int main(int argc, char * argv[]) {
     setmode(STDOUT_FILENO, O_BINARY);
 #endif
 
-    if (block_size < KiB(65) || block_size > MiB(511)) {
-        fprintf(stderr, "Block size must be between 65 KiB and 511 MiB.\n");
-        return 1;
-    }
+    int status = 0;
 
     if (batch && res->pos_argc) {
-        switch (mode) {
-            case MODE_ENCODE:
-                /* Encode each of the files. */
-                for (int i = 0; i < res->pos_argc; i++) {
-                    char * arg = res->pos_args[i];
-
-                    FILE * input_des = open_input(arg);
-                    char * output_name;
-                    if (force_stdstreams)
-                        output_name = NULL;
-                    else {
-                        output_name = malloc(strlen(arg) + 5);
-                        if (!output_name) {
-                            fprintf(stderr, "Failed to allocate memory.\n");
-                            return 1;
-                        }
-                        strcpy(output_name, arg);
-                        strcat(output_name, ".bz3");
-                    }
-
-                    FILE * output_des = open_output(output_name, force);
-                    process(input_des, output_des, mode, block_size, workers, verbose, arg);
-
-                    fclose(input_des);
-                    close_out_file(output_des);
-                    if (!force_stdstreams) free(output_name);
-                    if (remove_input_file) {
-                        remove_in_file(arg, output_des);
-                    }
+        /* Process each of the files on its own. */
+        for (int i = 0; i < res->pos_argc; i++) {
+            char * input = res->pos_args[i];
+            char * output = NULL;
+            if (mode != MODE_TEST && !force_stdstreams && strcmp(input, "-") != 0) {
+                output = output_name_for(input, mode);
+                if (!output) {
+                    status = 1;
+                    continue;
                 }
-                break;
-            case MODE_RECOVER:
-            case MODE_DECODE:
-                /* Decode each of the files. */
-                for (int i = 0; i < res->pos_argc; i++) {
-                    char * arg = res->pos_args[i];
-
-                    FILE * input_des = open_input(arg);
-                    char * output_name;
-                    if (force_stdstreams)
-                        output_name = NULL;
-                    else {
-                        output_name = malloc(strlen(arg) + 1);
-                        if (!output_name) {
-                            fprintf(stderr, "Failed to allocate memory.\n");
-                            return 1;
-                        }
-                        strcpy(output_name, arg);
-                        if (strlen(output_name) > 4 && !strcmp(output_name + strlen(output_name) - 4, ".bz3"))
-                            output_name[strlen(output_name) - 4] = 0;
-                        else {
-                            fprintf(stderr, "Warning: file %s has an unknown extension, skipping.\n", arg);
-                            return 1;
-                        }
-                    }
-
-                    FILE * output_des = open_output(output_name, force);
-                    process(input_des, output_des, mode, block_size, workers, verbose, arg);
-
-                    fclose(input_des);
-                    close_out_file(output_des);
-                    if (!force_stdstreams) free(output_name);
-                    if (remove_input_file) {
-                        remove_in_file(arg, output_des);
-                    }
-                }
-                break;
-            case MODE_TEST:
-                /* Test each of the files. */
-                for (int i = 0; i < res->pos_argc; i++) {
-                    char * arg = res->pos_args[i];
-
-                    FILE * input_des = open_input(arg);
-                    process(input_des, NULL, mode, block_size, workers, verbose, arg);
-                    fclose(input_des);
-                }
-                break;
+            }
+            if (process_file(input, output, mode, block_size, workers, verbose, force, remove_input_file)) status = 1;
+            free(output);
         }
-
-        if (fclose(stdout)) {
-            fprintf(stderr, "Error: Failed on fclose(stdout): %s\n", strerror(errno));
-            return 1;
-        }
-
-        return 0;
-    }
-
-    for (int i = 0; i < res->pos_argc; i++) {
-        char * arg = res->pos_args[i];
-
-        if (f1 != NULL && f2 != NULL) {
+    } else {
+        if (res->pos_argc > 2) {
             fprintf(stderr, "Error: too many files specified.\n");
             return 1;
         }
 
-        if (f1 == NULL)
-            f1 = arg;
-        else
-            f2 = arg;
-    }
-
-    if (f1 == NULL && f2 == NULL)
-        input = NULL, output = NULL;
-    else if (mode == MODE_TEST)
-        input = f1;
-    else {
-        if (mode == MODE_ENCODE) {
-            if (f2 == NULL) {
-                // encode from f1?
-                input = f1;
-                if (force_stdstreams)
-                    output = NULL;
-                else {
-                    output = malloc(strlen(f1) + 5);
-                    if (!output) {
-                        fprintf(stderr, "Failed to allocate memory.\n");
-                        return 1;
-                    }
-                    strcpy(output, f1);
-                    strcat(output, ".bz3");
-                }
-            } else {
-                // encode from f1 to f2.
-                input = f1;
-                output = f2;
-            }
-        } else if (mode == MODE_DECODE || mode == MODE_RECOVER) {
-            if (f2 == NULL) {
-                // decode from f1 to stdout.
-                input = f1;
-                if (force_stdstreams)
-                    output = NULL;
-                else {
-                    output = malloc(strlen(f1) + 1);
-                    if (!output) {
-                        fprintf(stderr, "Failed to allocate memory.\n");
-                        return 1;
-                    }
-                    strcpy(output, f1);
-                    if (strlen(output) > 4 && !strcmp(output + strlen(output) - 4, ".bz3"))
-                        output[strlen(output) - 4] = 0;
-                    else {
-                        fprintf(stderr, "Warning: file %s has an unknown extension, skipping.\n", f1);
-                        return 1;
-                    }
-                }
-            } else {
-                // decode from f1 to f2.
-                input = f1;
-                output = f2;
-            }
+        /* With one file name, the output name is derived from it; with two, the second one is the output. */
+        char * input = res->pos_argc > 0 ? res->pos_args[0] : NULL;
+        char * output = res->pos_argc > 1 ? res->pos_args[1] : NULL;
+        char * derived = NULL;
+        if (input && strcmp(input, "-") != 0 && !output && mode != MODE_TEST && !force_stdstreams) {
+            output = derived = output_name_for(input, mode);
+            if (!output) return 1;
         }
+
+        status = process_file(input, output, mode, block_size, workers, verbose, force, remove_input_file);
+        free(derived);
     }
 
-    FILE *input_des = NULL, *output_des = NULL;
-
-    input_des = open_input(input);
-    output_des = mode != MODE_TEST ? open_output(output, force) : NULL;
-
-    if (output != f2) free(output);
-
-    int r = process(input_des, output_des, mode, block_size, workers, verbose, input);
-
-    fclose(input_des);
-    close_out_file(output_des);
     if (fclose(stdout)) {
         fprintf(stderr, "Error: Failed on fclose(stdout): %s\n", strerror(errno));
         return 1;
     }
-    if (remove_input_file) {
-        remove_in_file(input, output_des);
+
+    return status;
+}
+
+int main(int argc, char * argv[]) {
+    yarg_options opt[] = { { 'e', no_argument, "encode" },
+                           { 'z', no_argument, "encode" }, /* alias */
+                           { 'd', no_argument, "decode" },
+                           { 't', no_argument, "test" },
+                           { 'c', no_argument, "stdout" },
+                           { 'f', no_argument, "force" },
+                           { 'r', no_argument, "recover" },
+                           { 'h', no_argument, "help" },
+                           { RM_OPTION, no_argument, "rm" },
+                           { 'k', no_argument, "keep" },
+                           { 'V', no_argument, "version" },
+                           { 'v', no_argument, "verbose" },
+                           { 'b', required_argument, "block" },
+                           { 'B', no_argument, "batch" },
+#ifdef PTHREAD
+                           { 'j', required_argument, "jobs" },
+#endif
+                           { 0, no_argument, NULL } };
+    yarg_settings settings = {
+        .dash_dash = true,
+        .style = YARG_STYLE_UNIX,
+    };
+    yarg_result * res = yarg_parse(argc, argv, opt, settings);
+    if (!res) {
+        fprintf(stderr, "bzip3: out of memory.\n");
+        return 1;
     }
-    return r;
+
+    int status = 1;
+    if (res->error) {
+        fputs(res->error, stderr);
+        fputs("Try 'bzip3 --help' for more information.\n", stderr);
+    } else {
+        status = run(res);
+    }
+
+    yarg_destroy(res);
+    return status;
 }

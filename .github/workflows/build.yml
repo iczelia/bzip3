@@ -44,18 +44,12 @@ jobs:
         name: bzip3-${{ github.sha }}
     - name: Extract source package
       run: tar --strip-components=1 -xf bzip3-${{ github.sha}}.tar.gz
-    - name: Fetch examples
-      run: |
-        mkdir examples
-        cd examples
-        wget https://github.com/iczelia/bzip3/raw/${{ github.sha }}/examples/shakespeare.txt \
-             https://github.com/iczelia/bzip3/raw/${{ github.sha }}/examples/shakespeare.txt.bz3
     - name: Configure
       run: ./configure CC=${{ matrix.compiler }} --${{ matrix.feature }}
     - name: Make
       run: make
     - name: Check
-      run: make roundtrip test
+      run: make check roundtrip || { cat test-suite.log; exit 1; }
 
   build-archs:
     name: Build Matrix for non-x86 architectures (Debian Bookworm)
@@ -74,12 +68,6 @@ jobs:
         name: bzip3-${{ github.sha }}
     - name: Extract source package
       run: tar --strip-components=1 -xf bzip3-${{ github.sha}}.tar.gz
-    - name: Fetch examples
-      run: |
-        mkdir examples
-        cd examples
-        wget https://github.com/iczelia/bzip3/raw/${{ github.sha }}/examples/shakespeare.txt \
-             https://github.com/iczelia/bzip3/raw/${{ github.sha }}/examples/shakespeare.txt.bz3
     - uses: uraimo/run-on-arch-action@v3
       name: Run in the container
       with:
@@ -96,8 +84,8 @@ jobs:
           if [ ${{ matrix.arch }} = armv6 -a ${{ matrix.compiler }} = clang ]; then
             export CFLAGS='-march=armv6'  # or we get "Illegal instruction" crashes
           fi
-          ./configure CC=${{ matrix.compiler }} --${{ matrix.feature }} --disable-arch-native --disable-link-time-optimization
-          make && make roundtrip test
+          ./configure CC=${{ matrix.compiler }} --${{ matrix.feature }} --disable-arch-native
+          make && { make check roundtrip || { cat test-suite.log; exit 1; }; }
   build-archs-ubuntu:
     name: Build Matrix for non-x86 architectures (Ubuntu Latest)
     needs: [ dist ]
@@ -115,12 +103,6 @@ jobs:
         name: bzip3-${{ github.sha }}
     - name: Extract source package
       run: tar --strip-components=1 -xf bzip3-${{ github.sha}}.tar.gz
-    - name: Fetch examples
-      run: |
-        mkdir examples
-        cd examples
-        wget https://github.com/iczelia/bzip3/raw/${{ github.sha }}/examples/shakespeare.txt \
-             https://github.com/iczelia/bzip3/raw/${{ github.sha }}/examples/shakespeare.txt.bz3
     - uses: uraimo/run-on-arch-action@v3
       name: Run in the container
       with:
@@ -134,15 +116,39 @@ jobs:
           apt install -q -y clang gcc make pkg-config
         run: |
           cd /bzip3
-          ./configure CC=${{ matrix.compiler }} --${{ matrix.feature }} --disable-arch-native --disable-link-time-optimization
-          make && make roundtrip test
+          ./configure CC=${{ matrix.compiler }} --${{ matrix.feature }} --disable-arch-native
+          make && { make check roundtrip || { cat test-suite.log; exit 1; }; }
+
+  sanitizers:
+    name: Test suite under ASan and UBSan
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v7
+    - name: Configure
+      run: |
+        ./bootstrap.sh
+        ./configure CC=clang CFLAGS="-O1 -g -fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer"
+    - name: Make
+      run: make
+    - name: Check
+      run: make check || { cat test-suite.log; exit 1; }
+    - name: Decode a file from an older release
+      run: make test
 
   cmake:
     name: Build with CMake
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shared: [ "ON", "OFF" ]
     steps:
     - uses: actions/checkout@v7
-    - name: CMake
-      run: cmake -B build
-    - name: Make
-      run: make -C build
+      with:
+        fetch-depth: 0  # the version is derived from the tags
+    - name: Configure
+      run: cmake -B build -DBUILD_SHARED_LIBS=${{ matrix.shared }}
+    - name: Build
+      run: cmake --build build
+    - name: Test
+      run: ctest --test-dir build --output-on-failure

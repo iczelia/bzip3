@@ -1,7 +1,7 @@
 
 /*
  * BZip3 - A spiritual successor to BZip2.
- * Copyright (C) 2022-2024 Kamila Szewczyk
+ * Copyright (C) 2022-2026 Kamila Szewczyk
  *
  * This program is free software: you can redistribute it and/or modify it
  * under the terms of the GNU Lesser General Public License as published by the Free
@@ -79,7 +79,7 @@ BZIP3_API const char * bz3_strerror(struct bz3_state * state);
 BZIP3_API struct bz3_state * bz3_new(int32_t block_size);
 
 /**
- * @brief Free the memory occupied by a block encoder state.
+ * @brief Free the memory occupied by a block encoder state. Does nothing if `state' is NULL.
  */
 BZIP3_API void bz3_free(struct bz3_state * state);
 
@@ -118,7 +118,7 @@ BZIP3_API int bz3_decompress(const uint8_t * in, uint8_t * out, size_t in_size, 
  * 
  * bz3_new():
  *    - Allocates all memory upfront:
- *      - Core state structure (sizeof(struct bz3_state))
+ *      - Core state structure (sizeof(struct bz3_state), which includes the checksum tables)
  *      - Swap buffer (bz3_bound(block_size) bytes)
  *      - SAIS array (BWT_BOUND(block_size) * sizeof(int32_t) bytes)
  *      - LZP lookup table ((1 << LZP_DICTIONARY) * sizeof(int32_t) bytes)
@@ -131,7 +131,8 @@ BZIP3_API int bz3_decompress(const uint8_t * in, uint8_t * out, size_t in_size, 
  * 
  * 1. bz3_encode_block() / bz3_decode_block():
  *    - Uses pre-allocated memory from bz3_new()
- *    - No additional memory allocation except for libsais (usually ~16KiB)
+ *    - No additional memory allocation except for the temporary tables of libsais (up to ~2MiB,
+ *      freed before the call returns)
  *    - Peak memory usage of physical RAM varies with compression stages:
  *      - LZP: Uses LZP lookup table + swap buffer
  *      - BWT: Uses SAIS array + swap buffer
@@ -141,7 +142,7 @@ BZIP3_API int bz3_decompress(const uint8_t * in, uint8_t * out, size_t in_size, 
  * of `bz3_bound(block_size)`.
  * 
  * In the parallel version `bz3_encode_blocks`, each thread gets its own state,
- * so memory usage is `n_threads * bz3_compress_memory_needed()`.
+ * so memory usage is `n_threads * bz3_min_memory_needed()`.
  * 
  * # High Level APIs
  * 
@@ -155,9 +156,9 @@ BZIP3_API int bz3_decompress(const uint8_t * in, uint8_t * out, size_t in_size, 
  *      in addition to the memory amount returned by this method call and libsais.
  *    - Everything is freed after compression completes
  * 
- * Memory remains constant during operation, with except of some small allocations from libsais during
- * BWT stage. That is not accounted by this function, though it usually amounts to ~16KiB, negligible.
- * The worst case of BWT is 2*block_size technically speaking.
+ * Memory remains constant during operation, with the exception of the temporary tables libsais allocates
+ * during the BWT stage. They are not accounted for by this function; they amount to at most ~2MiB
+ * regardless of the block size.
  * 
  * No dynamic (re)allocation occurs outside of that.
  * 
@@ -172,6 +173,9 @@ BZIP3_API size_t bz3_min_memory_needed(int32_t block_size);
  * @brief Encode a single block. Returns the amount of bytes written to `buffer'.
  * `buffer' must be able to hold at least `bz3_bound(size)' bytes. The size must not
  * exceed the block size associated with the state.
+ *
+ * Returns -1 on failure, in which case `bz3_last_error' tells the reason and the contents of `buffer'
+ * are unspecified. No more than `bz3_bound(size)' bytes of `buffer' are ever written to.
  */
 BZIP3_API int32_t bz3_encode_block(struct bz3_state * state, uint8_t * buffer, int32_t size);
 
@@ -187,6 +191,10 @@ BZIP3_API int32_t bz3_encode_block(struct bz3_state * state, uint8_t * buffer, i
  * If `buffer_size` is too small, `BZ3_ERR_DATA_SIZE_TOO_SMALL` will be returned.
  * The size must not exceed the block size associated with the state.
  * 
+ * Returns the size of the decoded data (always `orig_size`), or -1 on failure, in which case
+ * `bz3_last_error' tells the reason and the contents of `buffer' are unspecified. The block is
+ * untrusted input: no more than `buffer_size` bytes of `buffer' are ever accessed.
+ * 
  * @param buffer_size The size of the buffer at 'buffer'
  * @param compressed_size The size of the compressed data in 'buffer'
  * @param orig_size The original size of the data before compression.
@@ -199,7 +207,7 @@ BZIP3_API int32_t bz3_decode_block(struct bz3_state * state, uint8_t * buffer, s
  * The compressed sizes are written to the `sizes' array. Every buffer is overwritten and none of them can overlap.
  * Precisely `n' states, buffers and sizes must be supplied.
  *
- * Expects `n' between 2 and 16.
+ * Expects `n' between 2 and 16. Failures are reported through `bz3_last_error' of each state.
  *
  * Present in the shared library only if -lpthread was present during building.
  */
@@ -217,7 +225,7 @@ BZIP3_API void bz3_decode_blocks(struct bz3_state * states[], uint8_t * buffers[
  * a block at `block` pointer.
  * 
  * @param block Pointer to the compressed block data
- * @param block_size Size of the block buffer in bytes (must be at least 13 bytes for header)
+ * @param block_size Size of the block buffer in bytes (must cover the block header: 9 to 17 bytes)
  * @param orig_size Size of the original uncompressed data 
  * @return 1 if original size is sufficient, 0 if insufficient, -1 on header error (insufficient buffer size)
  * 
@@ -228,9 +236,8 @@ BZIP3_API void bz3_decode_blocks(struct bz3_state * states[], uint8_t * buffers[
  *      on the block that has been output.
  *      
  *      The purpose of this function is to prevent encoding blocks that would require an additional
- *      malloc at decompress time.
- *      The goal is to prevent erroring with `BZ3_ERR_DATA_SIZE_TOO_SMALL`, thus
- *      in turn 
+ *      malloc at decompress time, that is, to prevent `bz3_decode_block` from failing with
+ *      `BZ3_ERR_DATA_SIZE_TOO_SMALL` when given a buffer of only `orig_size` bytes.
  */
 BZIP3_API int bz3_orig_size_sufficient_for_decode(const uint8_t * block, size_t block_size, int32_t orig_size);
 
