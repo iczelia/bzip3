@@ -42,18 +42,48 @@
 #define BZ3_MODEL_LZP 2
 #define BZ3_MODEL_RLE 4
 
-/* CRC32C (Castagnoli), with an initial value of 1 and no final xor. Uses the dedicated CPU instructions when
-   the compiler is allowed to emit them and the slicing-by-8 algorithm otherwise. */
+/* CRC32C (Castagnoli), with an initial value of 1 and no final xor.
+
+   The dedicated CPU instructions are used directly if the compiler targets a CPU that has them. Otherwise, on
+   x86 they are still used if the CPU the library ends up running on turns out to have them; this is decided
+   once per state, so no global state is involved. Everything else gets the slicing-by-8 algorithm. */
 
 #if defined(__SSE4_2__) && (defined(__x86_64__) || defined(__i386__))
     #include <nmmintrin.h>
     #define BZ3_CRC32C_X86
+    #define BZ3_CRC32C_NATIVE
 #elif defined(__ARM_FEATURE_CRC32)
     #include <arm_acle.h>
-    #define BZ3_CRC32C_ARM
+    #define BZ3_CRC32C_NATIVE
+#elif (defined(__x86_64__) || defined(__i386__)) && (defined(__clang__) || (defined(__GNUC__) && __GNUC__ >= 5))
+    #include <nmmintrin.h>
+    #define BZ3_CRC32C_X86
+    #define BZ3_CRC32C_DISPATCH __attribute__((target("sse4.2")))
 #endif
 
-#if defined(BZ3_CRC32C_X86) || defined(BZ3_CRC32C_ARM)
+#if defined(BZ3_CRC32C_X86)
+
+    #ifndef BZ3_CRC32C_DISPATCH
+        #define BZ3_CRC32C_DISPATCH
+    #endif
+
+BZ3_CRC32C_DISPATCH static u32 crc32c_x86(u32 crc, const u8 * buf, size_t size) {
+    #if defined(__x86_64__)
+    u64 crc64 = crc;
+    for (; size >= 8; size -= 8, buf += 8) {
+        u64 v;
+        memcpy(&v, buf, sizeof(v));
+        crc64 = _mm_crc32_u64(crc64, v);
+    }
+    crc = (u32)crc64;
+    #endif
+    for (; size; size--) crc = _mm_crc32_u8(crc, *buf++);
+    return crc;
+}
+
+#endif
+
+#if defined(BZ3_CRC32C_NATIVE)
 
 /* Nothing to precompute. */
 typedef struct {
@@ -65,21 +95,12 @@ static void crc32c_init(crc32c_tables * t) { (void)t; }
 static u32 crc32sum(const crc32c_tables * t, u32 crc, const u8 * buf, size_t size) {
     (void)t;
     #if defined(BZ3_CRC32C_X86)
-        #if defined(__x86_64__)
-    u64 crc64 = crc;
-    for (; size >= 8; size -= 8, buf += 8) {
-        u64 v;
-        memcpy(&v, buf, sizeof(v));
-        crc64 = _mm_crc32_u64(crc64, v);
-    }
-    crc = (u32)crc64;
-        #endif
-    for (; size; size--) crc = _mm_crc32_u8(crc, *buf++);
+    return crc32c_x86(crc, buf, size);
     #else
     for (; size >= 4; size -= 4, buf += 4) crc = __crc32cw(crc, (u32)read_neutral_s32(buf));
     for (; size; size--) crc = __crc32cb(crc, *buf++);
-    #endif
     return crc;
+    #endif
 }
 
 #else
@@ -119,9 +140,15 @@ static const u32 crc32c_table[256] = {
 /* The table above, followed by the tables that advance the checksum over one to seven further zero bytes. */
 typedef struct {
     u32 table[8][256];
+    int use_x86; /* Whether the running CPU has the CRC32 instruction. */
 } crc32c_tables;
 
 static void crc32c_init(crc32c_tables * t) {
+    t->use_x86 = 0;
+    #if defined(BZ3_CRC32C_X86)
+    __builtin_cpu_init();
+    t->use_x86 = __builtin_cpu_supports("sse4.2") != 0;
+    #endif
     memcpy(t->table[0], crc32c_table, sizeof(crc32c_table));
     for (int k = 1; k < 8; k++)
         for (int i = 0; i < 256; i++)
@@ -129,6 +156,9 @@ static void crc32c_init(crc32c_tables * t) {
 }
 
 static u32 crc32sum(const crc32c_tables * t, u32 crc, const u8 * buf, size_t size) {
+    #if defined(BZ3_CRC32C_X86)
+    if (t->use_x86) return crc32c_x86(crc, buf, size);
+    #endif
     for (; size >= 8; size -= 8, buf += 8) {
         const u32 lo = crc ^ (u32)read_neutral_s32(buf), hi = (u32)read_neutral_s32(buf + 4);
         crc = t->table[7][lo & 0xff] ^ t->table[6][(lo >> 8) & 0xff] ^ t->table[5][(lo >> 16) & 0xff] ^

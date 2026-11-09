@@ -162,7 +162,8 @@ v1.5.6:
 * The compressed format is unchanged: files written by older versions decode as before, older versions decode
   the output of this one, and the encoder output is byte for byte identical.
 * Faster entropy decoder (speculative evaluation of both successor contexts), CRC32C using the SSE4.2/ARMv8
-  instructions where the compiler targets them and slicing-by-8 elsewhere, cheaper RLE and LZP inner loops; the
+  instructions where the compiler targets them, the SSE4.2 one on any x86 CPU that turns out to have it at run time
+  (GCC and clang), and slicing-by-8 elsewhere, cheaper RLE and LZP inner loops; the
   work arrays are no longer cleared for every decoded block.
 * bz3_encode_block (API): fail with BZ3_ERR_DATA_TOO_BIG instead of writing past `bz3_bound(size)` bytes should
   the entropy coder expand its input beyond that; reject negative sizes.
