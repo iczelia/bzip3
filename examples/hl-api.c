@@ -1,9 +1,22 @@
-/* An example of the high level API: compress a file in memory and decompress it again.
- *
- * Build and run in this directory, with bzip3 installed:
- *
- *   cc hl-api.c -o hl-api $(pkg-config --cflags --libs bzip3) && ./hl-api
- */
+/*  Copyright (C) 2022-2026 Kamila Szewczyk
+
+    This program is free software: you can redistribute it and/or modify it
+    under the terms of the GNU Lesser General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or (at your
+    option) any later version.
+
+    This program is distributed in the hope that it will be useful, but
+    WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser
+    General Public License for more details.
+
+    You should have received a copy of the GNU Lesser General Public License
+    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
+
+/*  An example of the high level interface: compress a file in memory and decompress it again.  With bzip3
+    installed, build and run it in this directory:
+
+      cc hl-api.c -o hl-api $(pkg-config --cflags --libs bzip3) && ./hl-api  */
 
 #include <libbz3.h>
 #include <stdio.h>
@@ -13,55 +26,44 @@
 #define MB (1024 * 1024)
 
 int main(void) {
-    printf("Compressing shakespeare.txt back and forth in memory.\n");
+  FILE * f = fopen("shakespeare.txt", "rb");
+  uint8_t * in, * packed, * back;
+  size_t size, packed_size, back_size;
+  int err;
 
-    /* Read the entire "shakespeare.txt" file to memory. */
-    FILE * fp = fopen("shakespeare.txt", "rb");
-    if (!fp) {
-        perror("shakespeare.txt");
-        return 1;
-    }
-    fseek(fp, 0, SEEK_END);
-    size_t size = (size_t)ftell(fp);
-    fseek(fp, 0, SEEK_SET);
-    uint8_t * buffer = malloc(size);
-    if (!buffer || fread(buffer, 1, size, fp) != size) {
-        fprintf(stderr, "Failed to read shakespeare.txt\n");
-        return 1;
-    }
-    fclose(fp);
+  if (!f) { perror("shakespeare.txt");  return 1; }
+  fseek(f, 0, SEEK_END);  size = (size_t) ftell(f);  fseek(f, 0, SEEK_SET);
 
-    /* Compress the file. The output buffer must hold at least bz3_bound(size) bytes. */
-    size_t out_size = bz3_bound(size);
-    uint8_t * outbuf = malloc(out_size);
-    if (!outbuf) return 1;
-    int bzerr = bz3_compress(1 * MB, buffer, outbuf, size, &out_size);
-    if (bzerr != BZ3_OK) {
-        printf("bz3_compress() failed with error code %d\n", bzerr);
-        return 1;
-    }
+  /*  The output buffer of bz3_compress holds at least bz3_bound(size) bytes.  */
+  packed_size = bz3_bound(size);
+  in = malloc(size);  packed = malloc(packed_size);  back = malloc(size);
+  if (!in || !packed || !back || fread(in, 1, size, f) != size) {
+    fprintf(stderr, "cannot read shakespeare.txt\n");
+    return 1;
+  }
+  fclose(f);
 
-    printf("%zu => %zu\n", size, out_size);
+  err = bz3_compress(1 * MB, in, packed, size, &packed_size);
+  if (err != BZ3_OK) {
+    fprintf(stderr, "bz3_compress failed with the error code %d\n", err);
+    return 1;
+  }
+  printf("%lu => %lu\n", (unsigned long) size, (unsigned long) packed_size);
 
-    /* Decompress the file into a second buffer and compare it with the original. */
-    size_t back_size = size;
-    uint8_t * back = malloc(back_size);
-    if (!back) return 1;
-    bzerr = bz3_decompress(outbuf, back, out_size, &back_size);
-    if (bzerr != BZ3_OK) {
-        printf("bz3_decompress() failed with error code %d\n", bzerr);
-        return 1;
-    }
+  /*  Decompress into a second buffer and compare it with the original.  */
+  back_size = size;
+  err = bz3_decompress(packed, back, packed_size, &back_size);
+  if (err != BZ3_OK) {
+    fprintf(stderr, "bz3_decompress failed with the error code %d\n", err);
+    return 1;
+  }
+  printf("%lu => %lu\n", (unsigned long) packed_size, (unsigned long) back_size);
 
-    printf("%zu => %zu\n", out_size, back_size);
+  if (back_size != size || memcmp(in, back, size)) {
+    fprintf(stderr, "the decompressed data differs from the original\n");
+    return 1;
+  }
 
-    if (back_size != size || memcmp(buffer, back, size) != 0) {
-        printf("The decompressed data differs from the original!\n");
-        return 1;
-    }
-
-    free(buffer);
-    free(outbuf);
-    free(back);
-    return 0;
+  free(in);  free(packed);  free(back);
+  return 0;
 }

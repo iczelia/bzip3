@@ -1,0 +1,21 @@
+Lead development
+Kamila Szewczyk <k@iczelia.net>
+
+Acknowledgements
+- Ilya Grebnov for libsais, the suffix array and Burrows-Wheeler transform
+  library bundled unmodified in 3rdparty/libsais under the Apache License 2.0
+  with LLVM exceptions (3rdparty/libsais/LICENSE), and for the LZP coder
+  that bzip3's is modelled on.
+- Ilya Muravyov for his public domain BWT post-coder, an ancestor of the
+  entropy coder.
+- Caleb Maclennan for the original autotools build system.
+- Thomas Klausner for bz3grep, used under the 2-clause BSD license.
+- Benjamin Strachan, and the package maintainers Leah Neukirchen, Grigory
+  Kirillov, Maciej Barc, Robert Schutz, Petr Pisar, Przemyslaw Skibinski,
+  Shun Sakai and others.
+
+License
+GNU Lesser General Public License version 3 or later.
+
+The bundled yarg command-line parser is by Kamila Szewczyk and uses the
+Zero-Clause BSD license.

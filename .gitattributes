@@ -1,2 +1,3 @@
-build-aux/* linguist-vendored
+m4/ax_*.m4 linguist-vendored
+contrib/gitlog-to-changelog linguist-vendored
 3rdparty/** linguist-vendored

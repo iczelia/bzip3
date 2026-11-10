@@ -1,0 +1,14 @@
+bz3_bound
+bz3_compress
+bz3_decode_block
+bz3_decode_blocks
+bz3_decompress
+bz3_encode_block
+bz3_encode_blocks
+bz3_free
+bz3_last_error
+bz3_min_memory_needed
+bz3_new
+bz3_orig_size_sufficient_for_decode
+bz3_strerror
+bz3_version

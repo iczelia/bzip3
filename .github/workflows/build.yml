@@ -2,153 +2,367 @@ name: Build
 
 on:
   push:
+    branches: [ '**' ]
   pull_request:
+  workflow_dispatch:
   schedule:
-    - cron: '0 2 * * 5'  # Every Friday at 2am
+    - cron: '0 2 * * 5'
+
+permissions:
+  contents: read
 
 jobs:
-
   dist:
     name: Package
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v7
-    - name: Configure
-      run: |
-        ./bootstrap.sh
-        ./configure
-    - name: Make source package
-      run: make VERSION=${{ github.sha }} dist
-    - name: Upload source package artifact
-      uses: actions/upload-artifact@v7
-      with:
-        name: bzip3-${{ github.sha }}
-        path: bzip3-${{ github.sha }}.tar.gz
-    - name: Run distcheck
-      run: make distcheck
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
-  build:
-    name: Build Matrix
-    needs: [ dist ]
-    strategy:
-      fail-fast: false
-      matrix:
-        platform: [ ubuntu-latest, macos-latest ]
-        compiler: [ clang, gcc ]
-        feature: [ with-pthread, without-pthread ]
-    runs-on: ${{ matrix.platform }}
-    steps:
-    - name: Download source package artifact
-      uses: actions/download-artifact@v8
-      with:
-        name: bzip3-${{ github.sha }}
-    - name: Extract source package
-      run: tar --strip-components=1 -xf bzip3-${{ github.sha}}.tar.gz
-    - name: Configure
-      run: ./configure CC=${{ matrix.compiler }} --${{ matrix.feature }}
-    - name: Make
-      run: make
-    - name: Check
-      run: make check roundtrip || { cat test-suite.log; exit 1; }
+      - name: Bootstrap and configure
+        run: ./bootstrap && ./configure
 
-  build-archs:
-    name: Build Matrix for non-x86 architectures (Debian Bookworm)
+      - name: Make source package
+        run: make VERSION=${{ github.sha }} dist-gzip
+
+      - name: Upload source package artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: bzip3-${{ github.sha }}
+          path: bzip3-${{ github.sha }}.tar.gz
+
+      - name: Run distcheck
+        run: make distcheck
+
+  linux:
+    name: Linux ${{ matrix.cc }} ${{ matrix.san }}
     needs: [ dist ]
-    strategy:
-      fail-fast: false
-      matrix:
-        compiler: [ clang, gcc ]
-        feature: [ with-pthread, without-pthread ]
-        arch: [ armv6, armv7, aarch64, s390x, ppc64le ]
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        cc: [ gcc, clang ]
+        san: [ none, sanitized ]
+    env:
+      ASAN_OPTIONS: abort_on_error=1:halt_on_error=1:detect_leaks=1
+      UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
     steps:
-    - name: Download source package artifact
-      uses: actions/download-artifact@v8
-      with:
-        name: bzip3-${{ github.sha }}
-    - name: Extract source package
-      run: tar --strip-components=1 -xf bzip3-${{ github.sha}}.tar.gz
-    - uses: uraimo/run-on-arch-action@v3
-      name: Run in the container
-      with:
-        arch: ${{ matrix.arch }}
-        distro: bookworm
-        shell: /bin/sh
-        dockerRunArgs: |
-          --volume "${PWD}:/bzip3"
-        install: |
-          apt update -q -y
-          apt install -q -y clang gcc make pkg-config
+      - name: Download source package artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: bzip3-${{ github.sha }}
+
+      - name: Extract source package
         run: |
-          cd /bzip3
-          if [ ${{ matrix.arch }} = armv6 -a ${{ matrix.compiler }} = clang ]; then
-            export CFLAGS='-march=armv6'  # or we get "Illegal instruction" crashes
+          tar --strip-components=1 -mxf bzip3-${{ github.sha }}.tar.gz
+          sleep 1
+          touch aclocal.m4 configure config.h.in Makefile.in
+
+      - name: Configure
+        run: |
+          if [ "${{ matrix.san }}" = none ]; then
+            ./configure CC=${{ matrix.cc }}
+          else
+            ./configure CC=${{ matrix.cc }} \
+              --enable-sanitizers=address,undefined CFLAGS="-O1 -g"
           fi
-          ./configure CC=${{ matrix.compiler }} --${{ matrix.feature }} --disable-arch-native
-          make && { make check roundtrip || { cat test-suite.log; exit 1; }; }
-  build-archs-ubuntu:
-    name: Build Matrix for non-x86 architectures (Ubuntu Latest)
+
+      - name: Make
+        run: make -j4 all
+
+      - name: Test suite
+        run: VERBOSE=1 make -j4 check
+
+      - name: Show the test logs
+        if: failure()
+        run: cat test-suite.log tests/*.log 2>&1 || true
+
+  linux-options:
+    name: Linux ${{ matrix.options }}
     needs: [ dist ]
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        compiler: [ clang, gcc ]
-        feature: [ with-pthread, without-pthread ]
-        arch: [ riscv64 ]
-    runs-on: ubuntu-latest
+        options:
+          - --disable-simd
+          - --disable-threads
+          - --disable-shared
+          - --disable-static
+          - --enable-static-exe
+          - --enable-sanitizers=thread
     steps:
-    - name: Download source package artifact
-      uses: actions/download-artifact@v8
-      with:
-        name: bzip3-${{ github.sha }}
-    - name: Extract source package
-      run: tar --strip-components=1 -xf bzip3-${{ github.sha}}.tar.gz
-    - uses: uraimo/run-on-arch-action@v3
-      name: Run in the container
-      with:
-        arch: ${{ matrix.arch }}
-        distro: ubuntu_latest
-        shell: /bin/sh
-        dockerRunArgs: |
-          --volume "${PWD}:/bzip3"
-        install: |
-          apt update -q -y
-          apt install -q -y clang gcc make pkg-config
+      - name: Download source package artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: bzip3-${{ github.sha }}
+
+      - name: Extract source package
         run: |
-          cd /bzip3
-          ./configure CC=${{ matrix.compiler }} --${{ matrix.feature }} --disable-arch-native
-          make && { make check roundtrip || { cat test-suite.log; exit 1; }; }
+          tar --strip-components=1 -mxf bzip3-${{ github.sha }}.tar.gz
+          sleep 1
+          touch aclocal.m4 configure config.h.in Makefile.in
 
-  sanitizers:
-    name: Test suite under ASan and UBSan
+      - name: Configure
+        run: ./configure ${{ matrix.options }}
+
+      - name: Make
+        run: make -j4 all
+
+      - name: Test suite
+        run: VERBOSE=1 make -j4 check
+
+      - name: Install and use the library
+        if: matrix.options != '--enable-sanitizers=thread'
+        run: |
+          make install DESTDIR=$PWD/stage
+          test -x stage/usr/local/bin/bzip3
+          test -f stage/usr/local/include/libbz3.h
+          test -f stage/usr/local/lib/pkgconfig/bzip3.pc
+
+      - name: Show the test logs
+        if: failure()
+        run: cat test-suite.log tests/*.log 2>&1 || true
+
+  linux-i386:
+    name: Linux i386 (32-bit)
+    needs: [ dist ]
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v7
-    - name: Configure
-      run: |
-        ./bootstrap.sh
-        ./configure CC=clang CFLAGS="-O1 -g -fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer"
-    - name: Make
-      run: make
-    - name: Check
-      run: make check || { cat test-suite.log; exit 1; }
-    - name: Decode a file from an older release
-      run: make test
+      - name: Download source package artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: bzip3-${{ github.sha }}
 
-  cmake:
-    name: Build with CMake
-    runs-on: ubuntu-latest
+      - name: Extract source package
+        run: |
+          tar --strip-components=1 -mxf bzip3-${{ github.sha }}.tar.gz
+          sleep 1
+          touch aclocal.m4 configure config.h.in Makefile.in
+
+      - name: Install the 32-bit toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-multilib
+
+      - name: Configure
+        run: ./configure --host=i686-pc-linux-gnu CC="gcc -m32"
+
+      - name: Make
+        run: make -j4 all
+
+      - name: Test suite
+        run: VERBOSE=1 make -j4 check
+
+      - name: Show the test logs
+        if: failure()
+        run: cat test-suite.log tests/*.log 2>&1 || true
+
+  linux-aarch64:
+    name: Linux aarch64 ${{ matrix.cc }} ${{ matrix.san }}
+    needs: [ dist ]
+    runs-on: ubuntu-24.04-arm
     strategy:
       fail-fast: false
       matrix:
-        shared: [ "ON", "OFF" ]
+        cc: [ gcc, clang ]
+        san: [ none, sanitized ]
+    env:
+      ASAN_OPTIONS: abort_on_error=1:halt_on_error=1:detect_leaks=1
+      UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
     steps:
-    - uses: actions/checkout@v7
-      with:
-        fetch-depth: 0  # the version is derived from the tags
-    - name: Configure
-      run: cmake -B build -DBUILD_SHARED_LIBS=${{ matrix.shared }}
-    - name: Build
-      run: cmake --build build
-    - name: Test
-      run: ctest --test-dir build --output-on-failure
+      - name: Download source package artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: bzip3-${{ github.sha }}
+
+      - name: Extract source package
+        run: |
+          tar --strip-components=1 -mxf bzip3-${{ github.sha }}.tar.gz
+          sleep 1
+          touch aclocal.m4 configure config.h.in Makefile.in
+
+      - name: Configure
+        run: |
+          if [ "${{ matrix.san }}" = none ]; then
+            ./configure CC=${{ matrix.cc }}
+          else
+            ./configure CC=${{ matrix.cc }} \
+              --enable-sanitizers=address,undefined CFLAGS="-O1 -g"
+          fi
+
+      - name: Make
+        run: make -j4 all
+
+      - name: Test suite
+        run: VERBOSE=1 BZ3_TEST_TRACE=1 make -j4 check
+
+      #  The ARMv8 CRC kernel is the one this job exists for.
+      - name: Confirm the CRC kernel
+        if: matrix.san == 'none'
+        run: |
+          grep 'armv8-crc dispatched' tests/t_suite.log
+
+      - name: Show the test logs
+        if: failure()
+        run: cat test-suite.log tests/*.log 2>&1 || true
+
+  macos:
+    name: macOS ${{ matrix.os }} ${{ matrix.san }}
+    needs: [ dist ]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ macos-latest, macos-26-intel ]
+        san: [ none, sanitized ]
+    env:
+      ASAN_OPTIONS: abort_on_error=1:halt_on_error=1
+      UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+    steps:
+      - name: Download source package artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: bzip3-${{ github.sha }}
+
+      - name: Extract source package
+        run: |
+          tar --strip-components=1 -mxf bzip3-${{ github.sha }}.tar.gz
+          sleep 1
+          touch aclocal.m4 configure config.h.in Makefile.in
+
+      - name: Configure
+        run: |
+          if [ "${{ matrix.san }}" = none ]; then
+            ./configure CC=clang
+          else
+            ./configure CC=clang \
+              --enable-sanitizers=address,undefined CFLAGS="-O1 -g"
+          fi
+
+      - name: Make
+        run: make -j4 all
+
+      - name: Test suite
+        run: VERBOSE=1 make -j4 check
+
+      - name: Show the test logs
+        if: failure()
+        run: cat test-suite.log tests/*.log 2>&1 || true
+
+  windows:
+    name: Windows ${{ matrix.msystem }}
+    needs: [ dist ]
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        msystem: [ MINGW64, UCRT64, MINGW32 ]
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: ${{ matrix.msystem }}
+          update: true
+          pacboy: toolchain:p
+          install: make tar
+
+      - name: Download source package artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: bzip3-${{ github.sha }}
+
+      - name: Extract source package
+        run: |
+          tar --strip-components=1 -mxf bzip3-${{ github.sha }}.tar.gz
+          sleep 1
+          touch aclocal.m4 configure config.h.in Makefile.in
+
+      - name: Configure
+        run: ./configure --enable-static-exe
+
+      - name: Make
+        run: make -j4 all
+
+      - name: Test suite
+        run: VERBOSE=1 make -j4 check
+
+      - name: Show the test logs
+        if: failure()
+        run: cat test-suite.log tests/*.log 2>&1 || true
+
+  cross:
+    name: Cross ${{ matrix.target.arch }}
+    needs: [ dist ]
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - arch: ppc64le
+            host: powerpc64le-linux-gnu
+            qemu: ppc64le
+            libc: ppc64el
+          - arch: riscv64
+            host: riscv64-linux-gnu
+            qemu: riscv64
+            libc: riscv64
+          - arch: s390x
+            host: s390x-linux-gnu
+            qemu: s390x
+            libc: s390x
+          - arch: armhf
+            host: arm-linux-gnueabihf
+            qemu: arm
+            libc: armhf
+    env:
+      QEMU: qemu-${{ matrix.target.qemu }}
+      QEMU_LD_PREFIX: /usr/${{ matrix.target.host }}
+    steps:
+      - name: Download source package artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: bzip3-${{ github.sha }}
+
+      - name: Extract source package
+        run: |
+          tar --strip-components=1 -mxf bzip3-${{ github.sha }}.tar.gz
+          sleep 1
+          touch aclocal.m4 configure config.h.in Makefile.in
+
+      - name: Install the cross-toolchain and qemu-user
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-user \
+            gcc-${{ matrix.target.host }} \
+            libc6-dev-${{ matrix.target.libc }}-cross
+
+      - name: Configure
+        run: |
+          ./configure --host=${{ matrix.target.host }} \
+                      CC=${{ matrix.target.host }}-gcc \
+                      CFLAGS=-O2 --disable-shared --enable-static-exe
+
+      - name: Make
+        run: make -j4 all
+
+      - name: Write the qemu launcher
+        run: |
+          file bzip3
+          mkdir qw
+          printf '#!/bin/sh\nexec %s "%s" "$@"\n' "$QEMU" "$PWD/bzip3" > qw/bzip3
+          chmod +x qw/bzip3
+          ./qw/bzip3 --version
+
+      - name: Test suite under qemu
+        run: |
+          make -j4 check VERBOSE=1 LOG_COMPILER="$QEMU" \
+                         BZ3_TEST_BINARY="$PWD/qw/bzip3"
+
+      - name: Show the test logs
+        if: failure()
+        run: cat test-suite.log tests/*.log 2>&1 || true

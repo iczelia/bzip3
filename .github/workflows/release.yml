@@ -3,80 +3,111 @@ name: Release
 on:
   push:
     tags:
-      - '*.*.*'
+      - '[0-9]*.[0-9]*.[0-9]*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
-
-  ghrelease:
-    name: Publish sources on GitHub Release
+  sources:
+    name: Build sources
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-      - name: Configure
-        run: |
-          ./bootstrap.sh
-          ./configure
-      - name: Build source packages
-        run: |
-          make dist
-          bzip2 -d -k bzip3-${{ github.ref_name }}.tar.bz2
-          zstd -19 bzip3-${{ github.ref_name }}.tar
-          7z a bzip3-${{ github.ref_name}}.tar{.7z,}
-      - name: Build a binary (for dogfooding)
-        run: make
-      - name: Create a dogfood package
-        run: |
-          ./bzip3 -e bzip3-${{ github.ref_name }}.tar
-      - name: Publish Release
-        uses: softprops/action-gh-release@v3
+      - uses: actions/checkout@v7
         with:
-          files: |
-            bzip3-${{ github.ref_name }}.tar
-            bzip3-${{ github.ref_name }}.tar.7z
-            bzip3-${{ github.ref_name }}.tar.bz2
-            bzip3-${{ github.ref_name }}.tar.bz3
-            bzip3-${{ github.ref_name }}.tar.gz
-            bzip3-${{ github.ref_name }}.tar.xz
-            bzip3-${{ github.ref_name }}.tar.zst
-            bzip3-${{ github.ref_name }}.zip
-      - name: Upload source package artifact
+          fetch-depth: 0
+
+      - name: Bootstrap and configure
+        run: ./bootstrap && ./configure
+
+      - name: Check the version against the tag
+        if: github.ref_type == 'tag'
+        run: test "$(build-aux/version.sh)" = "${{ github.ref_name }}"
+
+      - name: Build and check the source packages
+        run: make -j4 distcheck
+
+      - name: Build the other package formats
+        run: |
+          v=$(build-aux/version.sh)
+          bzip2 -d -k bzip3-$v.tar.bz2
+          zstd -19 -k bzip3-$v.tar
+          make -j4
+          ./bzip3 -e bzip3-$v.tar
+
+      - name: Upload the source packages
         uses: actions/upload-artifact@v7
         with:
-          name: bzip3-${{ github.ref_name }}
-          path: bzip3-${{ github.ref_name }}.tar.gz
+          name: sources
+          path: |
+            bzip3-*.tar
+            bzip3-*.tar.*
+            bzip3-*.zip
 
   binaries:
-    name: Publish Binaries on GitHub Release
-    needs: [ ghrelease ]
+    name: Build ${{ matrix.target.name }}
+    needs: [ sources ]
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         target:
-          - [ "x86_64-linux", "--enable-static-exe --disable-arch-native", "" ]
-          - [ "x86_64", "CC=x86_64-w64-mingw32-gcc --host x86_64-w64-mingw32 --enable-static-exe --disable-arch-native", "gcc-mingw-w64-x86-64" ]
-          - [ "i686", "CC=i686-w64-mingw32-gcc --host i686-w64-mingw32 --enable-static-exe --disable-arch-native", "gcc-mingw-w64-i686" ]
+          - name: x86_64-linux
+            configure: CC=musl-gcc
+            packages: musl-tools
+          - name: x86_64
+            configure: --host=x86_64-w64-mingw32 CC=x86_64-w64-mingw32-gcc
+            packages: gcc-mingw-w64-x86-64
+          - name: i686
+            configure: --host=i686-w64-mingw32 CC=i686-w64-mingw32-gcc
+            packages: gcc-mingw-w64-i686
     steps:
-      - name: Download source package artifact
+      - name: Download the source packages
         uses: actions/download-artifact@v8
         with:
-          name: bzip3-${{ github.ref_name }}
+          name: sources
+
       - name: Extract source package
-        run: tar --strip-components=1 -xf bzip3-${{ github.ref_name }}.tar.gz
-      - name: Install cross-compile dependencies
-        if: ${{ matrix.target[2] }}
+        run: |
+          tar --strip-components=1 -mxf bzip3-*.tar.gz
+          sleep 1
+          touch aclocal.m4 configure config.h.in Makefile.in
+
+      - name: Install the toolchain
         run: |
           sudo apt-get update
-          sudo apt-get install -y ${{ matrix.target[2] }}
+          sudo apt-get install -y ${{ matrix.target.packages }}
+
       - name: Configure
-        run: ./configure --bindir=/ --program-suffix=-${{ matrix.target[0] }} ${{ matrix.target[1] }}
+        run: |
+          ./configure --bindir=/ --program-suffix=-${{ matrix.target.name }} \
+                      --disable-shared --enable-static-exe ${{ matrix.target.configure }}
+
       - name: Make
         run: |
-          make
-          make DESTDIR=$(pwd)/output install-exec
-      - name: Publish binary
+          make -j4
+          make DESTDIR=$PWD/output install-binPROGRAMS
+
+      - name: Upload the binary
+        uses: actions/upload-artifact@v7
+        with:
+          name: binary-${{ matrix.target.name }}
+          path: output/bzip3-${{ matrix.target.name }}*
+
+  publish:
+    name: Publish the release
+    needs: [ sources, binaries ]
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download everything
+        uses: actions/download-artifact@v8
+        with:
+          merge-multiple: true
+
+      - name: Publish Release
         uses: softprops/action-gh-release@v3
         with:
           files: |
-            output/bzip3-${{ matrix.target[0] }}*
+            bzip3-*

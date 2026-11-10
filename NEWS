@@ -1,198 +1,192 @@
+Release notes for bzip3. See the git log, or ChangeLog in a release package, for
+source-level changes.
 
-v1.1.2:
-* fix memory UB in libsais
-* restructure src/cm.c
-* block size check in src/libbz3.c
-* fix shift UB in lzp
-* -h/-v CLI switches
-* change maximum block size to ~512M
+v1.5.6
+- The encoder no longer applies the RLE transform ahead of LZP; long runs are
+  left to LZP and the entropy coder. Encoding is about 3% faster and the
+  output differs from v1.5.5 by a few hundredths of a percent either way.
+  The decoder still handles blocks that use the transform.
+- libsais: update the to v2.12.1.
+- Faster entropy decoder (both successor contexts are evaluated ahead of the
+  bit that selects one), cheaper RLE and LZP decoding loops; the work arrays
+  are no longer cleared for every decoded block.
+- CRC-32C: a three-lane kernel on the SSE4.2 or ARMv8 CRC instructions is
+  built next to the portable slicing-by-8 one and chosen at run time from
+  CPUID or the auxiliary vector.
+- The source code was reorganised.
+- Build: remove deprecated CMake tools.
+- Build: '-march=native' is no longer added by default, and
+  '--disable-arch-native' was removed.
+  '--without-pthread' became '--disable-threads'. New options:
+  '--enable-sanitizers', '--disable-simd', '--with-pkgconfigdir'.
+- Native Windows builds use Windows threads instead of winpthreads.
+- bz3_encode_blocks, bz3_decode_blocks (API): always present; without
+  thread support they code the blocks one at a time.
+- Robustness fixes.
+- bz3_free (API) accepts NULL.
+- CLI: '--rm' no longer removes the input file when the operation failed.
+- CLI: an incomplete output file is removed on failure.
+- CLI: output files are created exclusively (no check-then-open race that
+  could be redirected through a planted symbolic link).
+- CLI: the same file is refused as both input and output.
+- CLI: block sizes and job counts that overflowed 'int' are rejected instead
+  of wrapping ('-b 4097' meant '-b 1').
+- CLI: threaded compression no longer appends an empty block when the input
+  size is a multiple of the amount of data read per batch.
+- CLI: '-' as a file name stands for the standard input or output. It used
+  to be dropped silently, which 'bz3cat -' and 'bz3grep' relied on.
+- update yarg from upstream.
+- outdated benchmarks were removed.
 
-v1.1.3:
-* fix a serious stdin/stdout CRLF bug on Windows that corrupted the data.
-* imply `-c` when a stream isn't opened thus preventing potential UB.
-* bzip3 file format documentation.
-* increase the maximum amount of parallel workers to 24.
-* prevent accidentally overwriting output; add the `-f` command-line flag.
+v1.5.5
+- bz3_decode_block (API): stricter validation of the original size stored in block headers; reject blocks whose
+  decoded size does not match the header.
+- bz3_decompress (API) and the CLI: reject block headers with negative sizes or original sizes exceeding the block size.
+- lzp/rle decoders: fix integer overflows in match and run length accumulation on malformed input (#191, #192).
+- ci: weekly scheduled builds, dependabot for GitHub Actions, fix clang builds on armv6.
 
-v1.1.4:
-* increase the maximum allowed amount of parallel workers to 64.
-* clean up the cm code
-* set up pkg-config support
-* CLI robustness improvements
+v1.5.4
+- bz3_decompress (API): accept blocks whose compressed size exceeds the block size (up to `bz3_bound`) (#174).
+- bz3_compress (API): fix the size of the last block when the input size is a multiple of the block size (#175).
+- autoconf: define the `extra_cflags` variable.
+- cmake: fix out-of-source builds of the man pages.
+- cmake: set the same soname as the autotools build.
+- man page: document the default values of `--jobs` and `--block`.
 
-v1.1.5:
-* rework the argument parsing schema to resemble UNIX utilities more.
-* make compression the default action
-* replace -v with -V for version information
-* manual pages
-* bz3cat, bz3more, bz3less, bz3grep, unbzip3 utilities
-* disable architecture-specific optimisations in github release builds
+v1.5.3
+- fix oom handling in main.c and yarg.h.
+- cmake build fixes for non-unix platforms:
+  - disable pthreads by default on windows & !mingw
+  - fix handling of dlls on windows.
+  - add missing find_dependency call to ensure Threads::threads is present in downstream find_package callers.
+- the project moved to https://github.com/iczelia/bzip3.
 
-v1.1.6:
-* fixed tickets: #53, #50, #45, #46 (portability issues & a verbatim block
-  decompression diagnostic issue)
-* package unbzip3 manpage
-* flockfile/funlockfile calls for WIN32
+v1.5.2
+- batch mode: fall back to stdin input with no auxiliary arguments.
+- bz3_compress (API): better bound estimation
+- yarg: oom handling; stop relying on (GNU) asprintf, use the baked in variant.
+- pkg-config: Add License variable
+- bz3_decompress (API): fix a memory leak
 
-v1.1.7:
-* rename unbzip3 as bunzip3 for bzip2/gzip/lzip/... compatibility.
-* high level api for libbzip3: `bz3_bound`, `bz3_compress` and `bz3_decompress`.
-* more robust decompression; safety checks for the RLE and LZP steps.
-* documentation for the frame format.
-* examples of bzip3 API usage, AFL fuzzing instructions.
-* `bz3_version` API function
-* more robust I/O handling and fsync (linux only) calls to ensure a correct I/O transaction.
+v1.5.1
+- Replace getopt-based parsing with `yarg`.
+- Change the soname to indicate a difference in the ABI.
 
-v1.1.8:
-* add the Apache-2.0 license of `libsais`.
+v1.5.0
+- Add `--rm` option that removes the original files after successful operation.
+- `bz3grep`: display the correct program name on invalid invocation.
+- Improve the docstrings regarding the use of `bz3_bound` with block decompression.
+- Tighter LZP/RLE bounds in the decoder => slightly improved compression with no
+  observable format change.
+- Improve the documentation and available tooling for fuzzing.
+- Rewritten the file format documentation.
+- Add the `bz3_min_memory_needed` API.
+- BREAKING: Change the signature of `bz3_decode_block` and `bz3_encode_block`.
+  Refer to the documentation for the new usage. This version is not ABI-compatible
+  with the previous versions of the package.
+- Fix: the file `$dir.bz3` being created when invoked as `bzip3 -e $dir` where
+  `$dir` is a directory.
 
-v1.2.0:
-* alias `-z` to `-e` (compatibility with bzip2).
-* version bzip3 library.
-* dynamically link library to the tool (eliminating the libbz3.c duplication in tool and library).
-* add verbose output (via `-v`).
-* add version information to the manual pages.
-* set `rpath` in the Makefile to solve an issue with /usr/local/lib not being present in the dynamic linker search path.
+v1.4.0
+- Wrap up all the changes from v1.3; bump up the minor version release.
+- Various changes for CMake; bundle CMake files with the autotools dist tarball.
+- Support for linking with C++.
 
-v1.2.1:
-* fix a LZP decompression bug when a match occurred before block boundary.
-* don't set rpath in the Makefile
-* fix build warnings from -v
-* add `most` support
-* windows binary mode fix
-
-v1.2.2:
-* safety fixes for the LZP pass.
-* add the `-k` compatibility flag.
-* use `env` to detect the shell in bzip3 utility scripts
-* update libtool to v2.4.7
-
-v1.2.3:
-* fix an important regression introduced in pull request #55 regarding I/O in main.c
-* slightly enlargen the SAIS buffer beyond the documented recommended size to avoid some memory errors in libsais
-* properly handle a scenario where the individual block original size is larger than the block size declared in the file header
-* further security fixes: strict check for size_src overflow of badly bounded b1, store mode: checking for truncation
-  mRLE: decoding bounds, bz3_bound in bz3_decompress
-
-v1.3.0:
-* resolve alignment issues on SPARC/s390x.
-* fix the security issues arising from libsais.
-* due to these changes, updating is strongly encouraged.
-
-v1.3.1:
-* Verbose mode in the tool now prints the extra statistics also during testing, not just encoding or decoding.
-* Update the CI pipeline to Debian Bullseye.
-* Fix a minor issue with side effects in RLE decoding.
-* Explicitly disable `-march=native` for releases.
-* Fix a bug in the tool reported by Adam Borowski regarding -t/-d input buffer checks.
-* Fix an issue with the current input offset not being taken into account in bz3_compress.
-
-v1.3.2:
-* Add the `-r` option ("recovery"). If a file fails to decompress fully (e.g. due to a CRC error), ignore it and write the
+v1.3.2
+- Add the `-r` option ("recovery"). If a file fails to decompress fully (e.g. due to a CRC error), ignore it and write the
   file regardless.
-* Add preliminary CMake support.
-* Fix the include guard macro name to work with pedantic compilers.
-* Fix the shift direction in the crc32 check function. Because of a programming mistake, v1.3.0 and v1.3.1
+- Add preliminary CMake support.
+- Fix the include guard macro name to work with pedantic compilers.
+- Fix the shift direction in the crc32 check function. Because of a programming mistake, v1.3.0 and v1.3.1
   introduced a breaking change to the CRC calculation code. The change has been reverted in this release.
   While the archives created with these versions of bzip3 will fail to regularly decompress due to a checksum
   error, using the recovery option as `bzip3 -rd` to decompress will
   restore their original contents.
 
-v1.4.0:
-* Wrap up all the changes from v1.3; bump up the minor version release.
-* Various changes for CMake; bundle CMake files with the autotools dist tarball.
-* Support for linking with C++.
+v1.3.1
+- Verbose mode in the tool now prints the extra statistics also during testing, not just encoding or decoding.
+- Update the CI pipeline to Debian Bullseye.
+- Fix a minor issue with side effects in RLE decoding.
+- Explicitly disable `-march=native` for releases.
+- Fix a bug in the tool reported by Adam Borowski regarding -t/-d input buffer checks.
+- Fix an issue with the current input offset not being taken into account in bz3_compress.
 
-v1.5.0:
-* Add `--rm` option that removes the original files after successful operation.
-* `bz3grep`: display the correct program name on invalid invocation.
-* Improve the docstrings regarding the use of `bz3_bound` with block decompression.
-* Tighter LZP/RLE bounds in the decoder => slightly improved compression with no
-  observable format change.
-* Improve the documentation and available tooling for fuzzing.
-* Rewritten the file format documentation.
-* Add the `bz3_min_memory_needed` API.
-* BREAKING: Change the signature of `bz3_decode_block` and `bz3_encode_block`.
-  Refer to the documentation for the new usage. This version is not ABI-compatible
-  with the previous versions of the package.
-* Fix: the file `$dir.bz3` being created when invoked as `bzip3 -e $dir` where
-  `$dir` is a directory.
+v1.3.0
+- resolve alignment issues on SPARC/s390x.
+- fix the security issues arising from libsais.
+- due to these changes, updating is strongly encouraged.
 
-v1.5.1:
-* Replace getopt-based parsing with `yarg`.
-* Change the soname to indicate a difference in the ABI.
+v1.2.3
+- fix an important regression introduced in pull request #55 regarding I/O in main.c
+- slightly enlargen the SAIS buffer beyond the documented recommended size to avoid some memory errors in libsais
+- properly handle a scenario where the individual block original size is larger than the block size declared in the file header
+- further security fixes: strict check for size_src overflow of badly bounded b1, store mode: checking for truncation
+  mRLE: decoding bounds, bz3_bound in bz3_decompress
 
-v1.5.2:
-* batch mode: fall back to stdin input with no auxiliary arguments.
-* bz3_compress (API): better bound estimation
-* yarg: oom handling; stop relying on (GNU) asprintf, use the baked in variant.
-* pkg-config: Add License variable
-* bz3_decompress (API): fix a memory leak
+v1.2.2
+- safety fixes for the LZP pass.
+- add the `-k` compatibility flag.
+- use `env` to detect the shell in bzip3 utility scripts
+- update libtool to v2.4.7
 
-v1.5.3:
-* fix oom handling in main.c and yarg.h.
-* cmake build fixes for non-unix platforms:
-  * disable pthreads by default on windows & !mingw
-  * fix handling of dlls on windows.
-  * add missing find_dependency call to ensure Threads::threads is present in downstream find_package callers.
-* the project moved to https://github.com/iczelia/bzip3.
+v1.2.1
+- fix a LZP decompression bug when a match occurred before block boundary.
+- don't set rpath in the Makefile
+- fix build warnings from -v
+- add `most` support
+- windows binary mode fix
 
+v1.2.0
+- alias `-z` to `-e` (compatibility with bzip2).
+- version bzip3 library.
+- dynamically link library to the tool (eliminating the libbz3.c duplication in tool and library).
+- add verbose output (via `-v`).
+- add version information to the manual pages.
+- set `rpath` in the Makefile to solve an issue with /usr/local/lib not being present in the dynamic linker search path.
 
-v1.5.4:
-* bz3_decompress (API): accept blocks whose compressed size exceeds the block size (up to `bz3_bound`) (#174).
-* bz3_compress (API): fix the size of the last block when the input size is a multiple of the block size (#175).
-* autoconf: define the `extra_cflags` variable.
-* cmake: fix out-of-source builds of the man pages.
-* cmake: set the same soname as the autotools build.
-* man page: document the default values of `--jobs` and `--block`.
+v1.1.8
+- add the Apache-2.0 license of `libsais`.
 
-v1.5.5:
-* bz3_decode_block (API): stricter validation of the original size stored in block headers; reject blocks whose
-  decoded size does not match the header.
-* bz3_decompress (API) and the CLI: reject block headers with negative sizes or original sizes exceeding the block size.
-* lzp/rle decoders: fix integer overflows in match and run length accumulation on malformed input (#191, #192).
-* ci: weekly scheduled builds, dependabot for GitHub Actions, fix clang builds on armv6.
+v1.1.7
+- rename unbzip3 as bunzip3 for bzip2/gzip/lzip/... compatibility.
+- high level api for libbzip3: `bz3_bound`, `bz3_compress` and `bz3_decompress`.
+- more robust decompression; safety checks for the RLE and LZP steps.
+- documentation for the frame format.
+- examples of bzip3 API usage, AFL fuzzing instructions.
+- `bz3_version` API function
+- more robust I/O handling and fsync (linux only) calls to ensure a correct I/O transaction.
 
-v1.5.6:
-* bz3_bound (API): increase the constant slack from 32 to 50 bytes. Previously, `bz3_compress` could write up
-  to 4 bytes past an output buffer of exactly `bz3_bound(in_size)` bytes for small, incompressible inputs.
-* libsais: update the bundled copy to v2.12.1 and stop patching it. It now lives unmodified in `3rdparty/libsais`
-  and is compiled as a part of `libbz3.c` with internal linkage, so the library still exports only `bz3_*` symbols.
-  The new inverse BWT makes decompression considerably faster.
-* The compressed format is unchanged: files written by older versions decode as before, and older versions decode
-  the output of this one.
-* The encoder no longer applies the RLE transform ahead of LZP; long runs are left to LZP and the entropy coder.
-  The decoder still handles blocks that use it.
-* Faster entropy decoder (speculative evaluation of both successor contexts), CRC32C using the SSE4.2/ARMv8
-  instructions where the compiler targets them, the SSE4.2 one on any x86 CPU that turns out to have it at run time
-  (GCC and clang), and slicing-by-8 elsewhere, cheaper RLE and LZP decoding loops; the
-  work arrays are no longer cleared for every decoded block.
-* bz3_encode_block (API): fail with BZ3_ERR_DATA_TOO_BIG instead of writing past `bz3_bound(size)` bytes should
-  the entropy coder expand its input beyond that; reject negative sizes.
-* bz3_compress (API): verify the remaining output space for every block.
-* bz3_decode_block (API): reject blocks whose header extends past the compressed data; fix the computation of
-  the header size, which demanded up to 24 bytes more of `buffer_size` than needed.
-* bz3_new (API): fix a NULL pointer dereference when memory allocation fails. bz3_free (API) accepts NULL.
-* bz3_encode_blocks, bz3_decode_blocks (API): handle failures to start a thread (the block is processed on
-  the calling thread) instead of joining a thread that was never created.
-* CLI: `--rm` no longer removes the input file when the operation failed (this also affected batch mode, where
-  failures were ignored altogether); the exit status of batch mode now reflects failures.
-* CLI: an incomplete output file is removed on failure.
-* CLI: output files are created exclusively (no check-then-open race that could be redirected through a
-  planted symbolic link) and with the access permissions of the input file instead of the default ones.
-* CLI: refuse to use the same file as input and output.
-* CLI: reject block sizes and job counts that overflowed `int` instead of silently using a wrapped value
-  (e.g. `-b 4097` meant `-b 1`).
-* CLI: the recovery mode no longer writes uninitialised memory in place of blocks that failed to decode.
-* CLI: threaded compression no longer appends an empty block when the input size is a multiple of the
-  amount of data read per batch.
-* yarg: update the bundled copy to the current upstream (0fbf7c3, now 0BSD-licensed): exact long option names win
-  over prefix matches, arguments to options that take none are rejected, a lone `-` is a positional argument.
-* CLI: `-` as a file name stands for the standard input or output. It used to be dropped silently, which
-  `bz3cat -` and `bz3grep` relied on.
-* Build: `make check` / `ctest` test suite, including reference files compressed by v1.5.5.
-* cmake: derive the version from `.tarball-version` or `git describe`, exactly like the autotools build, instead
-  of a hardcoded number (override with `-DBZIP3_VERSION=`); default to a Release build, stop leaking the `VERSION` and `PTHREAD` definitions to dependents, apply
-  `BZIP3_ENABLE_ARCH_NATIVE` to the compiler (it was passed to the linker only), work as a subproject.
-* autoconf: fall back gracefully when the compiler supports neither `-march=native` nor `-mcpu=native`.
-* The outdated benchmarks were removed.
+v1.1.6
+- fixed tickets: #53, #50, #45, #46 (portability issues & a verbatim block
+  decompression diagnostic issue)
+- package unbzip3 manpage
+- flockfile/funlockfile calls for WIN32
+
+v1.1.5
+- rework the argument parsing schema to resemble UNIX utilities more.
+- make compression the default action
+- replace -v with -V for version information
+- manual pages
+- bz3cat, bz3more, bz3less, bz3grep, unbzip3 utilities
+- disable architecture-specific optimisations in github release builds
+
+v1.1.4
+- increase the maximum allowed amount of parallel workers to 64.
+- clean up the cm code
+- set up pkg-config support
+- CLI robustness improvements
+
+v1.1.3
+- fix a serious stdin/stdout CRLF bug on Windows that corrupted the data.
+- imply `-c` when a stream isn't opened thus preventing potential UB.
+- bzip3 file format documentation.
+- increase the maximum amount of parallel workers to 24.
+- prevent accidentally overwriting output; add the `-f` command-line flag.
+
+v1.1.2
+- fix memory UB in libsais
+- restructure src/cm.c
+- block size check in src/libbz3.c
+- fix shift UB in lzp
+- -h/-v CLI switches
+- change maximum block size to ~512M

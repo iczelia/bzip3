@@ -1,38 +1,58 @@
 #!/bin/sh
-# Checks that the library defines no global symbols other than its own API: in particular, none of the
-# bundled libsais, which would clash with another copy of it linked into the same program.
+#  Copyright (C) 2022-2026 Kamila Szewczyk
 #
-# usage: symbols.sh <library or object file>...
+#  This program is free software: you can redistribute it and/or modify it
+#  under the terms of the GNU Lesser General Public License as published by
+#  the Free Software Foundation, either version 3 of the License, or (at your
+#  option) any later version.
 #
-# The list defaults to the environment variable BZIP3_TEST_LIBS. Files that do not exist are skipped.
+#  This program is distributed in the hope that it will be useful, but
+#  WITHOUT ANY WARRANTY; without even the implied warranty of
+#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser
+#  General Public License for more details.
+#
+#  You should have received a copy of the GNU Lesser General Public License
+#  along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-# shellcheck disable=SC2086
-[ $# -gt 0 ] || set -- $BZIP3_TEST_LIBS
-
-NM=${NM:-nm}
-command -v "$NM" > /dev/null 2>&1 || { echo "nm not available, skipping"; exit 77; }
-
+dir=${BZ3_TEST_LIBS:-.libs}
+syms=${BZ3_TEST_SYMS:-${srcdir:-.}/src/libbz3.sym}
+set -- ${NM:-nm}
+command -v "$1" > /dev/null 2>&1 || { echo "symbols.sh: no nm, skipped";  exit 77; }
+test -f "$syms" || { echo "symbols.sh: no $syms" >&2;  exit 99; }
 status=0
 checked=0
-for lib in "$@"; do
-    [ -f "$lib" ] || continue
-    case $lib in
-        *.so*) flags="-D -g --defined-only" ;;
-        *) flags="-g --defined-only" ;;
-    esac
-    # shellcheck disable=SC2086
-    listing=$("$NM" $flags "$lib" 2> /dev/null) || continue
-    checked=$((checked + 1))
-    # Names may carry a leading underscore (Mach-O, 32-bit Windows); ignore linker-defined symbols.
-    stray=$(echo "$listing" | awk 'NF >= 3 && $2 ~ /^[A-Z]$/ { print $3 }' |
-        grep -v -E '^_?bz3_|^_?_(init|fini|edata|end|bss_start)|^__bss_start|^_ITM_|^__gmon|^_?__' | sort -u)
-    if [ -n "$stray" ]; then
-        echo "FAIL: $lib exports symbols outside of the bz3_ namespace:" >&2
-        echo "$stray" | sed 's/^/    /' >&2
-        status=1
-    fi
+
+#  The defined global symbols of a file, without the underscore Mach-O and 32-bit Windows put before them, and
+#  without those the toolchain adds.
+globals() {
+  "$@" 2> /dev/null | awk 'NF >= 3 && $(NF - 1) ~ /^[A-TV-Z]$/ { print $NF }' | sed 's/^_//' \
+    | grep -v -E '^_?(_?init|_?fini|_?edata|_?end|_bss_start|_?ITM_|_gmon|_.*)$' | sort -u
+}
+
+for lib in "$dir"/libbzip3.a; do
+  test -f "$lib" || continue
+  checked=`expr $checked + 1`
+  stray=`globals "$@" -g "$lib" | grep -v '^bz3_'`
+  if test -n "$stray"; then
+    echo "symbols.sh: $lib defines symbols outside of the bz3_ namespace:"
+    echo "$stray"
+    status=1
+  fi
 done
 
-[ "$checked" -gt 0 ] || { echo "no library to inspect, skipping"; exit 77; }
-[ "$status" -eq 0 ] && echo "exported symbols OK ($checked file(s))"
+for lib in "$dir"/libbzip3.so "$dir"/libbzip3.dylib; do
+  test -f "$lib" || continue
+  checked=`expr $checked + 1`
+  case $lib in *.so) flags="-D -g" ;; *) flags="-g" ;; esac
+  globals "$@" $flags "$lib" > symbols.sh.$$
+  if ! sort -u "$syms" | cmp -s - symbols.sh.$$; then
+    echo "symbols.sh: $lib does not export exactly the functions of $syms:"
+    sort -u "$syms" | diff - symbols.sh.$$
+    status=1
+  fi
+  rm -f symbols.sh.$$
+done
+
+test $checked -gt 0 || { echo "symbols.sh: no library to inspect, skipped";  exit 77; }
+test $status -eq 0 && echo "symbols.sh: $checked libraries define only their own symbols"
 exit $status

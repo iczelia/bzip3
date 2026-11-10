@@ -1,21 +1,17 @@
+/*  Copyright (C) 2022-2026 Kamila Szewczyk
 
-/*
- * BZip3 - A spiritual successor to BZip2.
- * Copyright (C) 2022-2026 Kamila Szewczyk
- *
- * This program is free software: you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by the Free
- * Software Foundation, either version 3 of the License, or (at your option)
- * any later version.
- *
- * This program is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of  MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
- * more details.
- *
- * You should have received a copy of the GNU Lesser General Public License along with
- * this program.  If not, see <http://www.gnu.org/licenses/>.
- */
+    This program is free software: you can redistribute it and/or modify it
+    under the terms of the GNU Lesser General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or (at your
+    option) any later version.
+
+    This program is distributed in the hope that it will be useful, but
+    WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser
+    General Public License for more details.
+
+    You should have received a copy of the GNU Lesser General Public License
+    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
 #ifndef LIBBZ3_H
 #define LIBBZ3_H
@@ -23,21 +19,22 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* Symbol visibility control. */
+/*  Symbol visibility.  Define BZIP3_DLL_EXPORT or BZIP3_DLL_IMPORT to 1 when building or using a Windows DLL
+    without libtool.  */
 #ifndef BZIP3_VISIBLE
-    #if defined(__GNUC__) && (__GNUC__ >= 4) && !defined(__MINGW32__)
-        #define BZIP3_VISIBLE __attribute__((visibility("default")))
-    #else
-        #define BZIP3_VISIBLE
-    #endif
+#if defined(__GNUC__) && (__GNUC__ >= 4) && !defined(__MINGW32__)
+#define BZIP3_VISIBLE __attribute__((visibility("default")))
+#else
+#define BZIP3_VISIBLE
+#endif
 #endif
 
 #if defined(BZIP3_DLL_EXPORT) && (BZIP3_DLL_EXPORT == 1)
-    #define BZIP3_API __declspec(dllexport) BZIP3_VISIBLE
+#define BZIP3_API __declspec(dllexport) BZIP3_VISIBLE
 #elif defined(BZIP3_DLL_IMPORT) && (BZIP3_DLL_IMPORT == 1)
-    #define BZIP3_API __declspec(dllimport) BZIP3_VISIBLE
+#define BZIP3_API __declspec(dllimport) BZIP3_VISIBLE
 #else
-    #define BZIP3_API BZIP3_VISIBLE
+#define BZIP3_API BZIP3_VISIBLE
 #endif
 
 #ifdef __cplusplus
@@ -113,22 +110,22 @@ BZIP3_API int bz3_decompress(const uint8_t * in, uint8_t * out, size_t in_size, 
  * @brief Calculate the minimal memory required for compression with the given block size.
  * This includes all internal buffers and state structures. This calculates the amount of bytes
  * that will be allocated by a call to `bz3_new()`.
- * 
+ *
  * @details Memory allocation and usage patterns:
- * 
+ *
  * bz3_new():
  *    - Allocates all memory upfront:
  *      - Core state structure (sizeof(struct bz3_state), which includes the checksum tables)
  *      - Swap buffer (bz3_bound(block_size) bytes)
  *      - SAIS array (BWT_BOUND(block_size) * sizeof(int32_t) bytes)
- *      - LZP lookup table ((1 << LZP_DICTIONARY) * sizeof(int32_t) bytes)
+ *      - LZP lookup table ((1 << 18) * sizeof(int32_t) bytes)
  *      - Compression state (sizeof(state))
  *    - All memory remains allocated until bz3_free()
- * 
+ *
  * Additional memory may be used depending on API used from here.
- * 
+ *
  * # Low Level APIs
- * 
+ *
  * 1. bz3_encode_block() / bz3_decode_block():
  *    - Uses pre-allocated memory from bz3_new()
  *    - No additional memory allocation except for the temporary tables of libsais (up to ~2MiB,
@@ -137,31 +134,31 @@ BZIP3_API int bz3_decompress(const uint8_t * in, uint8_t * out, size_t in_size, 
  *      - LZP: Uses LZP lookup table + swap buffer
  *      - BWT: Uses SAIS array + swap buffer
  *      - Entropy coding: Uses compression state (cm_state) + swap buffer
- * 
+ *
  * Using the higher level API, `bz3_compress`, expect an additional allocation
  * of `bz3_bound(block_size)`.
- * 
+ *
  * In the parallel version `bz3_encode_blocks`, each thread gets its own state,
  * so memory usage is `n_threads * bz3_min_memory_needed()`.
- * 
+ *
  * # High Level APIs
- * 
+ *
  * 1. bz3_compress():
  *    - Allocates additional temporary compression buffer (bz3_bound(block_size) bytes)
  *      in addition to the memory amount returned by this method call and libsais.
  *    - Everything is freed after compression completes
- * 
+ *
  * 2. bz3_decompress():
  *    - Allocates additional temporary compression buffer (bz3_bound(block_size) bytes)
  *      in addition to the memory amount returned by this method call and libsais.
  *    - Everything is freed after compression completes
- * 
+ *
  * Memory remains constant during operation, with the exception of the temporary tables libsais allocates
  * during the BWT stage. They are not accounted for by this function; they amount to at most ~2MiB
  * regardless of the block size.
- * 
+ *
  * No dynamic (re)allocation occurs outside of that.
- * 
+ *
  * @param block_size The block size to be used for compression
  * @return The total number of bytes required for compression, or 0 if block_size is invalid
  */
@@ -181,20 +178,20 @@ BZIP3_API int32_t bz3_encode_block(struct bz3_state * state, uint8_t * buffer, i
 
 /**
  * @brief Decode a single block.
- * 
+ *
  * `buffer' must be able to hold at least `bz3_bound(orig_size)' bytes
  * in order to ensure decompression will succeed for all possible bzip3 blocks.
- * 
+ *
  * In most (but not all) cases, `orig_size` should usually be sufficient.
- * If it is not sufficient, you must allocate a buffer of size `bz3_bound(orig_size)` temporarily. 
- * 
+ * If it is not sufficient, you must allocate a buffer of size `bz3_bound(orig_size)` temporarily.
+ *
  * If `buffer_size` is too small, `BZ3_ERR_DATA_SIZE_TOO_SMALL` will be returned.
  * The size must not exceed the block size associated with the state.
- * 
+ *
  * Returns the size of the decoded data (always `orig_size`), or -1 on failure, in which case
  * `bz3_last_error' tells the reason and the contents of `buffer' are unspecified. The block is
  * untrusted input: no more than `buffer_size` bytes of `buffer' are ever accessed.
- * 
+ *
  * @param buffer_size The size of the buffer at 'buffer'
  * @param compressed_size The size of the compressed data in 'buffer'
  * @param orig_size The original size of the data before compression.
@@ -209,7 +206,7 @@ BZIP3_API int32_t bz3_decode_block(struct bz3_state * state, uint8_t * buffer, s
  *
  * Expects `n' between 2 and 16. Failures are reported through `bz3_last_error' of each state.
  *
- * Present in the shared library only if -lpthread was present during building.
+ * A library built without thread support codes the blocks one at a time.
  */
 BZIP3_API void bz3_encode_blocks(struct bz3_state * states[], uint8_t * buffers[], int32_t sizes[], int32_t n);
 
@@ -223,18 +220,18 @@ BZIP3_API void bz3_decode_blocks(struct bz3_state * states[], uint8_t * buffers[
 /**
  * @brief Check if using original file size as buffer size is sufficient for decompressing
  * a block at `block` pointer.
- * 
+ *
  * @param block Pointer to the compressed block data
  * @param block_size Size of the block buffer in bytes (must cover the block header: 9 to 17 bytes)
- * @param orig_size Size of the original uncompressed data 
+ * @param orig_size Size of the original uncompressed data
  * @return 1 if original size is sufficient, 0 if insufficient, -1 on header error (insufficient buffer size)
- * 
+ *
  * @remarks
- * 
+ *
  *      This function is useful for external APIs using the low level block encoding API,
  *      `bz3_encode_block`. You would normally call this directly after `bz3_encode_block`
  *      on the block that has been output.
- *      
+ *
  *      The purpose of this function is to prevent encoding blocks that would require an additional
  *      malloc at decompress time, that is, to prevent `bz3_decode_block` from failing with
  *      `BZ3_ERR_DATA_SIZE_TOO_SMALL` when given a buffer of only `orig_size` bytes.

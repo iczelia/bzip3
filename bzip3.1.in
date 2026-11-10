@@ -1,12 +1,12 @@
-.TH @TRANSFORMED_PACKAGE_NAME@ 1 "@MAN_DATE@" "version v@VERSION@"
+.TH bzip3 1 "@BZ3_DATE@" "version v@VERSION@"
 .
 .SH NAME
-@TRANSFORMED_PACKAGE_NAME@ \- an efficient statistical file compressor and spiritual successor
+bzip3 \- an efficient statistical file compressor and spiritual successor
 to bzip2
 
 .SH SYNOPSIS
-.B @TRANSFORMED_PACKAGE_NAME@
-.RB [ " \-BbcdehftV " ]
+.B bzip3
+.RB [ " \-BbcdefhjkrtvVz " ]
 [
 .I "filenames \&..."
 ]
@@ -14,16 +14,16 @@ to bzip2
 .P
 .B bz3cat
 is equivalent to
-.B @TRANSFORMED_PACKAGE_NAME@ \-dc
+.B bzip3 \-dc
 .P
 .B bunzip3
 is equivalent to
-.B @TRANSFORMED_PACKAGE_NAME@ \-d
+.B bzip3 \-d
 .SH DESCRIPTION
 Compress or decompress a file using Lempel Ziv
 prediction, followed by the Burrows-Wheeler transform and arithmetic
 coding.
-.B @TRANSFORMED_PACKAGE_NAME@,
+.B bzip3,
 like its ancestor
 .B bzip2,
 excels at compressing text or source code.
@@ -33,22 +33,22 @@ those of
 .B bzip2,
 but they are not identical.
 .PP
-.B @TRANSFORMED_PACKAGE_NAME@
+.B bzip3
 expects at most two filenames intertwined with flags.
-.B @TRANSFORMED_PACKAGE_NAME@
+.B bzip3
 will by default not overwrite existing files.
 If this behaviour is intended, use the \-f flag.
 Output files are created with the access permissions of the input file.
 If an operation fails, the incomplete output file is removed.
 
 If no file names are specified,
-.B @TRANSFORMED_PACKAGE_NAME@
+.B bzip3
 will compress from standard input to standard output, refusing
 to output binary data to a terminal. The \-e flag (encode) is implied.
 
 .B bunzip3
 (or,
-.B @TRANSFORMED_PACKAGE_NAME@ \-d
+.B bzip3 \-d
 equivalently) decompresses data from standard input to the standard
 output, refusing to read from a terminal.
 
@@ -56,9 +56,9 @@ If two files are specified, the first one is used in place of
 standard input, and the second one is used in place of standard
 output.
 
-If the \-c flag is present, @TRANSFORMED_PACKAGE_NAME@ will read from the specified
+If the \-c flag is present, bzip3 will read from the specified
 file and output data to standard output instead. Otherwise, if decoding,
-.B @TRANSFORMED_PACKAGE_NAME@
+.B bzip3
 will try to guess the decompressed filename by removing the
 .I .bz3
 extension. If not present, an error will be reported. If encoding,
@@ -70,12 +70,12 @@ extension to the input filename.
 .TP
 .B \-B --batch
 Enable batch mode. By default,
-.B @TRANSFORMED_PACKAGE_NAME@
+.B bzip3
 will error if more than two files are passed, and the two files specified
 are always treated as input and output. The batch mode makes
-.B @TRANSFORMED_PACKAGE_NAME@
+.B bzip3
 treat every file as input, so for example
-.I @TRANSFORMED_PACKAGE_NAME@ -Bd *.bz3
+.I bzip3 -Bd *.bz3
 will decompress all
 .I .bz3
 files in the current directory.
@@ -101,8 +101,8 @@ Overwrite existing files.
 Display a help message and exit.
 .TP
 .B \-j --jobs N
-Set the amount of parallel worker threads that process one block each. Default
-is to use 1 worker thread.
+Set the amount of parallel worker threads that process one block each, up
+to 64. Default is to use 1 worker thread.
 .TP
 .B \--rm
 Remove the input files after successful compression or decompression. This is
@@ -122,6 +122,10 @@ Display version information and exit.
 .B \-t --test
 Verify the validity of compressed blocks.
 .TP
+.B \-r --recover
+Decompress like \-d, but write out the blocks that fail their checks too,
+as far as they decode, instead of stopping at the first one.
+.TP
 .B \--
 Treat all subsequent arguments as file names, even if they start with
 a dash. This is so you can handle files with names beginning with a dash.
@@ -134,7 +138,7 @@ file format has constant overhead of 9 bytes per file and from
 9 to 17 bytes per block. Random data is coded so that expansion
 is generally under 0.8%.
 
-.B @TRANSFORMED_PACKAGE_NAME@
+.B bzip3
 uses 32-bit CRC to ensure that the decompressed version of a file is
 identical to the original. This guards against corruption of the
 compressed data. 
