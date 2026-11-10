@@ -29,6 +29,7 @@ AM_SILENT_RULES([yes])
 AC_PROG_CC
 AC_USE_SYSTEM_EXTENSIONS
 AM_PROG_AR
+BZ3_TOOL_PATHS
 LT_INIT([win32-dll])
 
 AC_DEFINE_UNQUOTED([BZ3_HOST_TRIPLE], ["$host"],
@@ -36,8 +37,15 @@ AC_DEFINE_UNQUOTED([BZ3_HOST_TRIPLE], ["$host"],
 
 AC_SYS_LARGEFILE
 
-AC_CHECK_HEADERS([unistd.h io.h sys/auxv.h sys/wait.h])
-AC_CHECK_FUNCS([fsync getauxval])
+AC_CHECK_HEADERS([unistd.h io.h sys/auxv.h sys/wait.h sys/time.h sys/resource.h sys/sysctl.h \
+                  sys/xattr.h sys/acl.h copyfile.h])
+AC_CHECK_FUNCS([fsync getauxval sysconf getrlimit sysctlbyname sigaction posix_madvise \
+                fchown fchmod futimens futimes fchflags flistxattr fcopyfile \
+                acl_get_fd acl_set_fd acl_get_fd_np])
+AC_FUNC_MMAP
+AC_FUNC_FSEEKO
+AC_CHECK_MEMBERS([struct stat.st_atim.tv_nsec, struct stat.st_atimespec.tv_nsec,
+                  struct stat.st_atimensec, struct stat.st_flags])
 
 dnl  The directory of bzip3.pc, without requiring pkg-config and its macros to build.
 AC_ARG_WITH([pkgconfigdir],
@@ -49,6 +57,57 @@ case "$host_os" in
   mingw*) bz3_is_windows=yes ;;
   *)      bz3_is_windows=no  ;;
 esac
+AM_CONDITIONAL([BZ3_IS_WINDOWS], [test "x$bz3_is_windows" = "xyes"])
+
+AC_ARG_WITH([windows-target],
+  [AS_HELP_STRING([--with-windows-target=@<:@nt|legacy@:>@],
+    [select the native Windows API and loader baseline (default: nt)])],
+  [bz3_win_target=$withval], [bz3_win_target=nt])
+BZ3_WIN_CPPFLAGS=""
+BZ3_WIN_CFLAGS=""
+BZ3_WIN_LDFLAGS=""
+BZ3_WIN_EXE_LDFLAGS=""
+case "$bz3_win_target" in
+  nt|legacy) ;;
+  *) AC_MSG_ERROR([--with-windows-target must be "nt" or "legacy"]) ;;
+esac
+if test "x$bz3_is_windows" = "xyes"; then
+  case "$bz3_win_target" in
+    nt)
+      BZ3_WIN_CPPFLAGS="-D_WIN32_WINNT=0x0600 -DWINVER=0x0600"
+      BZ3_WIN_LDFLAGS="-Wl,--major-subsystem-version=6"
+      BZ3_WIN_LDFLAGS="$BZ3_WIN_LDFLAGS,--minor-subsystem-version=0"
+      BZ3_WIN_LDFLAGS="$BZ3_WIN_LDFLAGS,--major-os-version=6"
+      BZ3_WIN_LDFLAGS="$BZ3_WIN_LDFLAGS,--minor-os-version=0"
+      BZ3_WIN_EXE_LDFLAGS="-municode"
+      ;;
+    legacy)
+      case "$host_cpu" in
+        i?86) ;;
+        *) AC_MSG_ERROR([the legacy Windows target requires a 32-bit x86 host]) ;;
+      esac
+      BZ3_WIN_CPPFLAGS="-D_WIN32_WINNT=0x0400 -DWINVER=0x0400"
+      AC_DEFINE([BZ3_WIN_LEGACY], [1],
+                [Define for the ANSI Windows API and the Windows 95 loader baseline])
+      BZ3_WIN_CFLAGS="-march=i486 -mtune=i486"
+      BZ3_WIN_LDFLAGS="-Wl,--major-subsystem-version=4"
+      BZ3_WIN_LDFLAGS="$BZ3_WIN_LDFLAGS,--minor-subsystem-version=0"
+      BZ3_WIN_LDFLAGS="$BZ3_WIN_LDFLAGS,--major-os-version=4"
+      BZ3_WIN_LDFLAGS="$BZ3_WIN_LDFLAGS,--minor-os-version=0"
+      BZ3_WIN_LDFLAGS="$BZ3_WIN_LDFLAGS,--disable-dynamicbase"
+      BZ3_WIN_LDFLAGS="$BZ3_WIN_LDFLAGS,--disable-nxcompat"
+      ;;
+  esac
+elif test "x$with_windows_target" != "x"; then
+  AC_MSG_ERROR([--with-windows-target is valid only for native Windows])
+else
+  bz3_win_target=none
+fi
+AC_SUBST([BZ3_WIN_CPPFLAGS])
+AC_SUBST([BZ3_WIN_CFLAGS])
+AC_SUBST([BZ3_WIN_LDFLAGS])
+AC_SUBST([BZ3_WIN_EXE_LDFLAGS])
+AM_CONDITIONAL([BZ3_WIN_LEGACY], [test "x$bz3_win_target" = "xlegacy"])
 
 dnl  Native Windows has threads of its own; elsewhere they are POSIX threads.
 AC_ARG_ENABLE([threads],
@@ -80,6 +139,7 @@ case "$host_cpu" in
   *)                   bz3_is_x86=no  ;;
 esac
 bz3_skip_simd=no
+test "x$bz3_win_target" = "xlegacy" && bz3_skip_simd=yes
 AC_ARG_ENABLE([simd],
   [AS_HELP_STRING([--disable-simd],[build the portable CRC only])],
   [test "x$enableval" = "xno" && bz3_skip_simd=yes])
@@ -167,6 +227,7 @@ AC_MSG_NOTICE([
   bzip3 $PACKAGE_VERSION configuration
     host          : $host
     threads       : $bz3_have_threads
+    windows target: $bz3_win_target
     CRC-32C       : portable${BZ3_SSE42_CFLAGS:+, sse4.2}${BZ3_ARMCRC_CFLAGS:+, armv8-crc}
     static program: $enable_static_exe
     sanitizers    : $enable_sanitizers

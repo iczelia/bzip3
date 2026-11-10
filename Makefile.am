@@ -15,9 +15,9 @@
 
 ACLOCAL_AMFLAGS = -I m4
 
-AM_CFLAGS = -std=c99 $(BZ3_WARN_CFLAGS) $(BZ3_HARDEN_CFLAGS) $(BZ3_SAN_CFLAGS)
-AM_LDFLAGS = $(BZ3_SAN_LDFLAGS)
-AM_CPPFLAGS = -I$(top_builddir) -I$(top_srcdir)/include -I$(top_srcdir)/src
+AM_CFLAGS = -std=c99 $(BZ3_WARN_CFLAGS) $(BZ3_HARDEN_CFLAGS) $(BZ3_SAN_CFLAGS) $(BZ3_WIN_CFLAGS)
+AM_LDFLAGS = $(BZ3_SAN_LDFLAGS) $(BZ3_WIN_LDFLAGS)
+AM_CPPFLAGS = -I$(top_builddir) -I$(top_srcdir)/include -I$(top_srcdir)/src $(BZ3_WIN_CPPFLAGS)
 
 lib_LTLIBRARIES = libbzip3.la
 include_HEADERS = include/libbz3.h
@@ -33,7 +33,8 @@ BZ3_CODER = src/coder/cm.c src/coder/lzp.c src/coder/rle.c
 BZ3_SOURCES = src/libbz3.c $(BZ3_SYS) $(BZ3_CODER)
 
 noinst_HEADERS = \
-  src/sys/common.h src/sys/cpu.h src/sys/crc.h src/sys/crchw.h src/sys/yarg.h \
+  src/sys/common.h src/sys/cpu.h src/sys/crc.h src/sys/crchw.h src/sys/map.h src/sys/mem.h \
+  src/sys/meta.h src/sys/thread.h src/sys/win32.h src/sys/yarg.h \
   src/coder/bwt.h src/coder/cm.h src/coder/lzp.h src/coder/rle.h \
   3rdparty/libsais/libsais.h
 
@@ -46,7 +47,7 @@ libbz3core_la_LIBADD = libbz3sais.la
 noinst_LTLIBRARIES += libbz3sais.la
 libbz3sais_la_SOURCES  = src/coder/bwt.c
 libbz3sais_la_CPPFLAGS = $(AM_CPPFLAGS) -I$(top_srcdir)/3rdparty/libsais
-libbz3sais_la_CFLAGS   = -std=c99 $(BZ3_HARDEN_CFLAGS) $(BZ3_SAN_CFLAGS)
+libbz3sais_la_CFLAGS   = -std=c99 $(BZ3_HARDEN_CFLAGS) $(BZ3_SAN_CFLAGS) $(BZ3_WIN_CFLAGS)
 
 ##  The kernels built for instruction sets beyond the baseline, which run when the CPU has them.
 if BZ3_SSE42
@@ -69,10 +70,11 @@ libbzip3_la_LDFLAGS = $(AM_LDFLAGS) -no-undefined -version-info 1:1:0 \
                       -export-symbols $(top_srcdir)/src/libbz3.sym
 EXTRA_libbzip3_la_DEPENDENCIES = $(top_srcdir)/src/libbz3.sym
 
-bzip3_SOURCES = src/main.c
+bzip3_SOURCES = src/main.c src/sys/map.c src/sys/mem.c src/sys/meta.c src/sys/thread.c src/sys/win32.c
 bzip3_LDADD = libbzip3.la
+bzip3_LDFLAGS = $(AM_LDFLAGS) $(BZ3_WIN_EXE_LDFLAGS)
 if BZ3_STATIC_EXE
-bzip3_LDFLAGS = $(AM_LDFLAGS) -all-static
+bzip3_LDFLAGS += -all-static
 endif
 
 ##  Test suite linked to the library's objects and run against the built binary.

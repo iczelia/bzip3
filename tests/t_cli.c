@@ -16,6 +16,7 @@
 #include "t_harness.h"
 #ifndef _WIN32
 #include <sys/stat.h>
+#include <sys/time.h>
 #include <unistd.h>
 #endif
 
@@ -215,6 +216,22 @@ static void t_files(void) {
     CHECK(!chmod(in, 0640) && !xt_run(log, "\"%s\"", in) && !stat(packed, &st) &&
           (st.st_mode & 0777) == 0640, "the output has the mode of the input");
     xt_unlink(packed);
+    { struct timeval tv[2];
+      const mode_t mask = umask(077);
+      tv[0].tv_sec = 1000000000;  tv[0].tv_usec = 0;
+      tv[1].tv_sec = 1200000000;  tv[1].tv_usec = 0;
+      CHECK(!chmod(in, 02644) && !utimes(in, tv) && !xt_run(log, "-k \"%s\"", in) &&
+            !stat(packed, &st) && (st.st_mode & 07777) == 0644 && st.st_mtime == 1200000000 &&
+            st.st_atime == 1000000000, "the output has the times of the input and no special bits");
+      xt_unlink(out);
+      CHECK(!xt_run(log, "-d \"%s\" \"%s\"", packed, out) && !stat(out, &st) &&
+            (st.st_mode & 07777) == 0644 && st.st_mtime == 1200000000,
+            "and so does what is decoded from it");
+      xt_unlink(out);
+      CHECK(!xt_run(log, "-c \"%s\" > \"%s\"", in, out) && !stat(out, &st) &&
+            st.st_mtime != 1200000000, "the standard output is left as it is");
+      umask(mask);  chmod(in, 0644); }
+    xt_unlink(out);  xt_unlink(packed);
     xt_spew(target, (const u8 *) "precious", 8);
     CHECK(!symlink(target, packed) && xt_run(log, "\"%s\"", in) == 1 &&
           xt_file_size(target) == 8, "a planted symbolic link is not written through");

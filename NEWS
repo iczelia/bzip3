@@ -35,6 +35,22 @@ v1.5.6
   size is a multiple of the amount of data read per batch.
 - CLI: '-' as a file name stands for the standard input or output. It used
   to be dropped silently, which 'bz3cat -' and 'bz3grep' relied on.
+- CLI: output files keep the owner, group, permissions, ACLs, extended
+  attributes and timestamps of the input file. On Windows: timestamps, file
+  attributes and the security descriptor.
+- CLI: reading, compression and writing now run in parallel, which is faster
+  on slow disks. This uses up to three extra batches of blocks of memory
+  when free memory is available.
+- CLI: input files are memory-mapped; output goes through a 1 MiB buffer.
+- CLI: bzip3 warns before decompressing a file that needs more memory than
+  the system has, and reduces '-j' if that many threads do not fit.
+- CLI: '--rm' keeps the input file if it was modified during the run.
+- Windows: Unicode file names work regardless of the code page, paths longer
+  than 260 characters work, and wildcards are expanded (#152).
+- Windows: new configure option '--with-windows-target=nt|legacy'. 'legacy'
+  builds for old 32-bit systems using the ANSI API.
+- Build: fix configure when the compiler is installed in a path containing
+  spaces, such as 'C:/Program Files' (#160).
 - update yarg from upstream.
 - outdated benchmarks were removed.
 

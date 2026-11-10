@@ -107,7 +107,7 @@ to 64. Default is to use 1 worker thread.
 .B \--rm
 Remove the input files after successful compression or decompression. This is
 silently ignored if output is stdout. The input file is always kept if the
-operation fails.
+operation fails or if the file was modified while bzip3 was reading it.
 .TP
 .B \-k --keep
 Keep (don't delete) the input files. Set by default, provided only
@@ -156,6 +156,41 @@ requirement is set at compression time by the choice of block size.
 In general, try and use the largest block size memory constraints allow,
 since that maximises the compression achieved.  Compression and
 decompression speed are virtually unaffected by block size.
+
+With \-j, each worker thread uses this much memory.
+
+The block size is stored at the start of a compressed file. Before
+decompressing, bzip3 compares the memory required with the memory available
+on the system. If there is not enough, it prints a warning. If \-j asks for
+more threads than fit in memory, bzip3 uses fewer threads and says so.
+
+bzip3 reads, compresses and writes at the same time. To do this it keeps up
+to three extra batches of blocks in memory, each about the size of one block
+per worker thread. The extra batches are only allocated when free memory is
+available.
+
+.SH FILE ATTRIBUTES
+
+When both input and output are regular files, bzip3 copies the following
+from the input file to the output file:
+.IP \(bu 2
+owner and group;
+.IP \(bu 2
+permissions, access control lists and extended attributes;
+.IP \(bu 2
+access and modification times.
+.PP
+On Windows it copies the creation, access and modification times, the file
+attributes and the security descriptor.
+
+Changing the owner of a file usually requires root (on Windows, an elevated
+process). If bzip3 cannot change the owner, the output keeps the owner it was
+created with. If it cannot change the group, the group permissions are
+reduced to the permissions given to other users. The setuid and setgid bits
+are never copied.
+
+Attributes are not copied when reading from standard input or writing to
+standard output.
 
 .SH AUTHOR
 Kamila Szewczyk, k@iczelia.net.
