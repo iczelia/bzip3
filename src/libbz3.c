@@ -335,49 +335,10 @@ static s32 lzp_decompress(const u8 * RESTRICT in, u8 * RESTRICT out, s32 n, s32 
     return lzp_decode_block(in, in + n, lut, out, out + max);
 }
 
-/* RLE code. */
+/* RLE code. The encoder no longer applies this transform, but blocks written by older versions (and by
+   other implementations) use it, so the decoder has to stay. */
 
 #define MRLE_HEADER 32
-
-static s32 mrlec(const u8 * RESTRICT in, s32 inlen, u8 * RESTRICT out) {
-    const u8 * const in_end = in + inlen;
-    s32 gain[256] = { 0 };
-
-    /* A run of n symbols occupies 2 + (n - 1) / 255 bytes when collapsed. */
-    for (const u8 * ip = in; ip < in_end;) {
-        const u8 c = *ip;
-        const u8 * run_end = ip + 1;
-        while (run_end < in_end && *run_end == c) run_end++;
-        const s32 n = (s32)(run_end - ip);
-        gain[c] += n - 2 - (n - 1) / 255;
-        ip = run_end;
-    }
-
-    u8 * op = out;
-    for (s32 i = 0; i < MRLE_HEADER; ++i) {
-        u8 mask = 0;
-        for (s32 j = 0; j < 8; ++j) mask |= (u8)((gain[i * 8 + j] > 0) << j);
-        *op++ = mask;
-    }
-
-    for (const u8 * ip = in; ip < in_end;) {
-        const u8 c = *ip;
-        if (gain[c] > 0) {
-            const u8 * run_end = ip + 1;
-            while (run_end < in_end && *run_end == c) run_end++;
-            s32 n = (s32)(run_end - ip);
-            *op++ = c;
-            for (; n > 255; n -= 255) *op++ = 255;
-            *op++ = (u8)(n - 1);
-            ip = run_end;
-        } else {
-            *op++ = c;
-            ip++;
-        }
-    }
-
-    return (s32)(op - out);
-}
 
 /* Decodes at most `inlen' bytes of RLE data into exactly `outlen' bytes. Returns nonzero on failure. */
 static int mrled(const u8 * RESTRICT in, s32 inlen, u8 * RESTRICT out, s32 outlen) {
@@ -680,13 +641,6 @@ BZIP3_API s32 bz3_encode_block(struct bz3_state * state, u8 * buffer, s32 data_s
     u8 *src = buffer, *dst = state->swap_buffer, *tmp;
     int model = 0;
 
-    const s32 rle_size = mrlec(src, data_size, dst);
-    if (rle_size < data_size) {
-        tmp = src, src = dst, dst = tmp;
-        data_size = rle_size;
-        model |= BZ3_MODEL_RLE;
-    }
-
     const s32 lzp_size = lzp_compress(src, dst, data_size, state->lzp_lut);
     if (lzp_size > 0 && lzp_size < data_size) {
         tmp = src, src = dst, dst = tmp;
@@ -702,10 +656,8 @@ BZIP3_API s32 bz3_encode_block(struct bz3_state * state, u8 * buffer, s32 data_s
         return -1;
     }
 
-    /* Header: CRC32, BWT index, model, then the optional LZP and RLE sizes. */
-    s32 header_size = 9;
-    if (model & BZ3_MODEL_LZP) header_size += 4;
-    if (model & BZ3_MODEL_RLE) header_size += 4;
+    /* Header: CRC32, BWT index, model, then the optional LZP size. */
+    const s32 header_size = model & BZ3_MODEL_LZP ? 13 : 9;
 
     /* The BWT output lives in `dst', the entropy coder overwrites `src'. */
     cm_init(state->cm_state);
@@ -719,9 +671,7 @@ BZIP3_API s32 bz3_encode_block(struct bz3_state * state, u8 * buffer, s32 data_s
     write_neutral_s32(src + 4, bwt_idx);
     src[8] = (u8)model;
 
-    u8 * field = src + 9;
-    if (model & BZ3_MODEL_LZP) write_neutral_s32(field, lzp_size), field += 4;
-    if (model & BZ3_MODEL_RLE) write_neutral_s32(field, rle_size);
+    if (model & BZ3_MODEL_LZP) write_neutral_s32(src + 9, lzp_size);
 
     if (src != buffer) memcpy(buffer, src, (size_t)(header_size + coded_size));
 

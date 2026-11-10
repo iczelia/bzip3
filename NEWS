@@ -159,11 +159,13 @@ v1.5.6:
 * libsais: update the bundled copy to v2.12.1 and stop patching it. It now lives unmodified in `3rdparty/libsais`
   and is compiled as a part of `libbz3.c` with internal linkage, so the library still exports only `bz3_*` symbols.
   The new inverse BWT makes decompression considerably faster.
-* The compressed format is unchanged: files written by older versions decode as before, older versions decode
-  the output of this one, and the encoder output is byte for byte identical.
+* The compressed format is unchanged: files written by older versions decode as before, and older versions decode
+  the output of this one.
+* The encoder no longer applies the RLE transform ahead of LZP; long runs are left to LZP and the entropy coder.
+  The decoder still handles blocks that use it.
 * Faster entropy decoder (speculative evaluation of both successor contexts), CRC32C using the SSE4.2/ARMv8
   instructions where the compiler targets them, the SSE4.2 one on any x86 CPU that turns out to have it at run time
-  (GCC and clang), and slicing-by-8 elsewhere, cheaper RLE and LZP inner loops; the
+  (GCC and clang), and slicing-by-8 elsewhere, cheaper RLE and LZP decoding loops; the
   work arrays are no longer cleared for every decoded block.
 * bz3_encode_block (API): fail with BZ3_ERR_DATA_TOO_BIG instead of writing past `bz3_bound(size)` bytes should
   the entropy coder expand its input beyond that; reject negative sizes.

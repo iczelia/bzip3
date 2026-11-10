@@ -14,7 +14,7 @@ This documentation covers the technical specifications of the BZip3 format.
 - Memory usage of ~(6 x block size), both compression and decompression
 - Little-endian encoding for integers
 - Embedded CRC32 checksums for data integrity
-- Combines LZP, RLE followed by Burrows-Wheeler transform and arithmetic coding coupled with
+- Combines LZP (and, in files written by older versions, RLE) followed by Burrows-Wheeler transform and arithmetic coding coupled with
   a statistical predictor.
 
 ## Format Overview

@@ -173,7 +173,8 @@ struct Block {
 The `model` byte in regular blocks indicates which compression features were used:
 
 - `0x02`: LZP (Lempel Ziv Prediction) filter
-- `0x04`: RLE (Run-Length Encoding) filter
+- `0x04`: RLE (Run-Length Encoding) filter. The reference encoder stopped producing it after v1.5.5;
+  decoders must still support it.
 
 ## External Resources
 

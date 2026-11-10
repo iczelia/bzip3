@@ -20,7 +20,7 @@ is equivalent to
 is equivalent to
 .B @TRANSFORMED_PACKAGE_NAME@ \-d
 .SH DESCRIPTION
-Compress or decompress a file using run length encoding and Lempel Ziv
+Compress or decompress a file using Lempel Ziv
 prediction, followed by the Burrows-Wheeler transform and arithmetic
 coding.
 .B @TRANSFORMED_PACKAGE_NAME@,
