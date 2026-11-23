@@ -222,7 +222,7 @@ BZIP3_API void bz3_decode_blocks(struct bz3_state * states[], uint8_t * buffers[
  * a block at `block` pointer.
  *
  * @param block Pointer to the compressed block data
- * @param block_size Size of the block buffer in bytes (must cover the block header: 9 to 17 bytes)
+ * @param block_size Size of the compressed block in bytes, as returned by `bz3_encode_block`
  * @param orig_size Size of the original uncompressed data
  * @return 1 if original size is sufficient, 0 if insufficient, -1 on header error (insufficient buffer size)
  *
@@ -235,6 +235,7 @@ BZIP3_API void bz3_decode_blocks(struct bz3_state * states[], uint8_t * buffers[
  *      The purpose of this function is to prevent encoding blocks that would require an additional
  *      malloc at decompress time, that is, to prevent `bz3_decode_block` from failing with
  *      `BZ3_ERR_DATA_SIZE_TOO_SMALL` when given a buffer of only `orig_size` bytes.
+ *      The block is decoded in place, so `orig_size` is never sufficient for a block larger than it.
  */
 BZIP3_API int bz3_orig_size_sufficient_for_decode(const uint8_t * block, size_t block_size, int32_t orig_size);
 

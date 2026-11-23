@@ -141,9 +141,17 @@ static void t_blocks(void) {
             "%d bytes of kind %d: the model is plain or LZP", size, kind);
 
       /*  8 bytes stand for a stored empty block, which has no model byte to inspect.  */
-      if (packed >= 9)
-        CHECK(bz3_orig_size_sufficient_for_decode(buf, (sz) packed, size) >= 0,
-              "%d bytes of kind %d: the header parses", size, kind);
+      if (packed >= 9) {
+        const int enough = bz3_orig_size_sufficient_for_decode(buf, (sz) packed, size);
+        CHECK(enough == (packed <= size), "%d bytes of kind %d: sufficient size", size, kind);
+        if (enough == 1 && packed <= size) {
+          u8 * c = xt_alloc((sz) size);
+          memcpy(c, buf, (sz) packed);
+          CHECK(bz3_decode_block(state, c, (sz) size, packed, size) == size && !memcmp(c, in, (sz) size),
+                "%d bytes of kind %d round trip in place", size, kind);
+          free(c);
+        }
+      }
 
       /*  Too small a buffer is refused before anything is written past it.  */
       if (packed > 9)
