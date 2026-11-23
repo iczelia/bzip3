@@ -546,13 +546,13 @@ BZIP3_API int bz3_orig_size_sufficient_for_decode(const uint8_t * block,
                                                   int32_t orig_size) {
   block_header h;
 
-  /*  The initial header takes 9 bytes: CRC, BWT index and the model.  */
-  if (block_size < 9) return -1;
+  /*  The CRC and BWT index are present even in an empty stored block.  */
+  if (block_size < 8) return -1;
 
   /*  Blocks stored verbatim are 8 bytes longer than the original data.  */
   if ((i32) rd32le(block + 4) == -1) return 0;
 
-  if (!read_block_header(block, block_size, &h)) return -1;
+  if (block_size < 9 || !read_block_header(block, block_size, &h)) return -1;
 
   /*  The buffer holds the compressed block before anything is decoded into it.  */
   if (orig_size < 0 || (sz) orig_size < block_size) return 0;

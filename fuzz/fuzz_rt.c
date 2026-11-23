@@ -35,8 +35,7 @@ int LLVMFuzzerTestOneInput(const uint8_t * data, size_t size) {
   memcpy(b, a, (sz) packed);
   r = bz3_decode_block(state, b, cap, packed, (i32) size);
   FZ_REQUIRE(r == (i32) size && !memcmp(b, data, size), "round trip");
-  if (packed >= 9 &&
-      bz3_orig_size_sufficient_for_decode(a, (sz) packed, (i32) size) == 1) {
+  if (bz3_orig_size_sufficient_for_decode(a, (sz) packed, (i32) size) == 1) {
     u8 * c = fz_alloc(size);
     FZ_REQUIRE(size >= (sz) packed, "sufficient size");
     memcpy(c, a, (sz) packed);

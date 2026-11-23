@@ -24,6 +24,9 @@ v1.5.6
   thread support they code the blocks one at a time.
 - Robustness fixes.
 - bz3_free (API) accepts NULL.
+- bz3_orig_size_sufficient_for_decode (API) now accounts for the compressed
+  block itself. Callers that passed the buffer capacity or just the header
+  length must pass the exact byte count returned by bz3_encode_block.
 - CLI: '--rm' no longer removes the input file when the operation failed.
 - CLI: an incomplete output file is removed on failure.
 - CLI: output files are created exclusively (no check-then-open race that

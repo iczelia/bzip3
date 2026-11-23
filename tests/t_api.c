@@ -129,6 +129,7 @@ static void t_blocks(void) {
     for (kind = 0; kind < 5; kind++) {
       int size = sizes[i];
       i32 packed;
+      int enough;
       xt_fill(&rng, in, (sz) size, kind);
       memcpy(buf, in, (sz) size);
       packed = bz3_encode_block(state, buf, size);
@@ -140,17 +141,14 @@ static void t_blocks(void) {
       CHECK(packed < 9 || (i32) rd32le(buf + 4) == -1 || !(buf[8] & ~2),
             "%d bytes of kind %d: the model is plain or LZP", size, kind);
 
-      /*  8 bytes stand for a stored empty block, which has no model byte to inspect.  */
-      if (packed >= 9) {
-        const int enough = bz3_orig_size_sufficient_for_decode(buf, (sz) packed, size);
-        CHECK(enough == (packed <= size), "%d bytes of kind %d: sufficient size", size, kind);
-        if (enough == 1 && packed <= size) {
-          u8 * c = xt_alloc((sz) size);
-          memcpy(c, buf, (sz) packed);
-          CHECK(bz3_decode_block(state, c, (sz) size, packed, size) == size && !memcmp(c, in, (sz) size),
-                "%d bytes of kind %d round trip in place", size, kind);
-          free(c);
-        }
+      enough = bz3_orig_size_sufficient_for_decode(buf, (sz) packed, size);
+      CHECK(enough == (packed <= size), "%d bytes of kind %d: sufficient size", size, kind);
+      if (enough == 1 && packed <= size) {
+        u8 * c = xt_alloc((sz) size);
+        memcpy(c, buf, (sz) packed);
+        CHECK(bz3_decode_block(state, c, (sz) size, packed, size) == size && !memcmp(c, in, (sz) size),
+              "%d bytes of kind %d round trip in place", size, kind);
+        free(c);
       }
 
       /*  Too small a buffer is refused before anything is written past it.  */
@@ -174,6 +172,11 @@ static void t_blocks(void) {
   CHECK(bz3_decode_block(state, buf, cap, -1, 10) == -1, "a negative compressed size");
   CHECK(bz3_decode_block(state, buf, cap, 100, -1) == -1, "a negative original size");
   CHECK(bz3_decode_block(state, buf, 8, 8, 0) == -1, "a buffer below the header size");
+  {
+    const u8 prefix[8] = { 0 };
+    CHECK(bz3_orig_size_sufficient_for_decode(prefix, 7, 0) == -1, "incomplete BWT index");
+    CHECK(bz3_orig_size_sufficient_for_decode(prefix, 8, 0) == -1, "missing model byte");
+  }
 
   bz3_free(state);
   free(in);  free(buf);
